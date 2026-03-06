@@ -1,0 +1,38 @@
+#!/bin/bash
+#
+# Uninstall Claude Code binary.
+# Removes the binary from RAM and USB cache but preserves config/auth.
+#
+
+set -e
+
+PLUGIN="claude-code"
+PLUGIN_DIR="/boot/config/plugins/${PLUGIN}"
+BIN_CACHE="${PLUGIN_DIR}/bin/claude"
+
+echo "=== Claude Code Uninstall ==="
+echo ""
+
+if command -v claude &>/dev/null; then
+  echo "Current version: $(claude --version 2>/dev/null || echo "unknown")"
+else
+  echo "Claude Code is not installed."
+  exit 0
+fi
+echo ""
+
+# Remove binary from RAM locations
+echo "Removing binary..."
+rm -f /usr/local/bin/claude
+rm -f /root/.local/bin/claude
+rm -rf /root/.local/share/claude
+
+# Remove cached binary from USB flash
+rm -f "${BIN_CACHE}"
+
+echo "Binary removed."
+echo ""
+echo "Config and auth data preserved at:"
+echo "  ${PLUGIN_DIR}/claude-config/"
+echo ""
+echo "=== Uninstall complete ==="

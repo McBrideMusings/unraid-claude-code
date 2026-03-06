@@ -87,8 +87,15 @@ Icon="claude-code.png"
   <form method="POST" action="/update.htm" target="progressFrame" style="display:inline">
     <input type="hidden" name="csrf_token" value="<?=$csrf?>">
     <input type="hidden" name="#command" value="/usr/local/emhttp/plugins/claude-code/scripts/update-claude">
-    <button type="submit" class="claude-btn claude-btn-secondary">Update Claude Code</button>
+    <button type="submit" class="claude-btn claude-btn-secondary">Update</button>
   </form>
+  <?if ($version):?>
+  <form method="POST" action="/update.htm" target="progressFrame" style="display:inline" onsubmit="return confirm('Uninstall Claude Code binary? Config and auth data will be preserved.')">
+    <input type="hidden" name="csrf_token" value="<?=$csrf?>">
+    <input type="hidden" name="#command" value="/usr/local/emhttp/plugins/claude-code/scripts/uninstall-claude">
+    <button type="submit" class="claude-btn claude-btn-secondary" style="background:#dc3545;">Uninstall</button>
+  </form>
+  <?endif;?>
 </div>
 
 <!-- Configuration Tab -->
