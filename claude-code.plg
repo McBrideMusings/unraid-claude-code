@@ -1,0 +1,154 @@
+<?xml version='1.0' standalone='yes'?>
+
+<!DOCTYPE PLUGIN [
+  <!ENTITY name        "claude-code">
+  <!ENTITY author      "McBrideMusings">
+  <!ENTITY version     "2025.03.06">
+  <!ENTITY launch      "Utilities/ClaudeCode">
+  <!ENTITY gitURL      "https://raw.githubusercontent.com/McBrideMusings/unraid-claude-code/main">
+  <!ENTITY releaseURL  "https://github.com/McBrideMusings/unraid-claude-code/releases/download/v&version;">
+  <!ENTITY pluginURL   "&gitURL;/claude-code.plg">
+  <!ENTITY plugin_pkg  "&name;-&version;-x86_64-1.txz">
+  <!ENTITY plugin_md5  "PLACEHOLDER">
+]>
+
+<PLUGIN  name="&name;"
+         author="&author;"
+         version="&version;"
+         launch="&launch;"
+         pluginURL="&pluginURL;"
+         min="6.12.0">
+
+<CHANGES>
+##&name;
+
+###&version;
+- Initial release
+- Claude Code CLI with persistent binary cache on USB flash
+- WebGUI settings page with config editors and skills browser
+- Auth token persistence across reboots via symlinked config
+</CHANGES>
+
+<!--
+plugin package (WebGUI pages, PHP backend, default config)
+-->
+<FILE Name="/boot/config/plugins/&name;/&plugin_pkg;" Run="upgradepkg --install-new">
+<URL>&releaseURL;/&plugin_pkg;</URL>
+<MD5>&plugin_md5;</MD5>
+</FILE>
+
+<!--
+post-install: download Claude Code binary, set up config symlink
+-->
+<FILE Run="/bin/bash">
+<INLINE>
+PLUGIN="claude-code"
+PLUGIN_DIR="/boot/config/plugins/${PLUGIN}"
+BIN_CACHE="${PLUGIN_DIR}/bin/claude"
+BIN_PATH="/usr/local/bin/claude"
+CONFIG_DIR="${PLUGIN_DIR}/claude-config"
+
+echo "--- Setting up Claude Code ---"
+
+# Create directories on USB flash
+mkdir -p "${PLUGIN_DIR}/bin"
+mkdir -p "${CONFIG_DIR}"
+
+# Default config
+if [ ! -f "${PLUGIN_DIR}/${PLUGIN}.cfg" ]; then
+  cp /usr/local/emhttp/plugins/${PLUGIN}/default.cfg "${PLUGIN_DIR}/${PLUGIN}.cfg"
+fi
+
+# Prefill global CLAUDE.md on first install
+if [ ! -f "${CONFIG_DIR}/CLAUDE.md" ]; then
+  cp /usr/local/emhttp/plugins/${PLUGIN}/default-claude.md "${CONFIG_DIR}/CLAUDE.md" 2>/dev/null || true
+fi
+
+# Make scripts executable
+chmod +x /usr/local/emhttp/plugins/${PLUGIN}/scripts/* 2>/dev/null || true
+
+# If no cached binary, download via official installer
+if [ ! -f "${BIN_CACHE}" ]; then
+  echo "No cached binary found. Downloading Claude Code..."
+
+  # USB flash is vfat (no exec permission), so run installer with HOME in RAM
+  TMPHOME=$(mktemp -d)
+  HOME="${TMPHOME}" curl -fsSL https://claude.ai/install.sh | HOME="${TMPHOME}" bash 2>/dev/null || true
+
+  INSTALLED="${TMPHOME}/.local/bin/claude"
+  if [ ! -f "${INSTALLED}" ]; then
+    INSTALLED=$(find "${TMPHOME}" -name "claude" -type f -executable 2>/dev/null | head -1)
+  fi
+
+  if [ -n "${INSTALLED}" ] &amp;&amp; [ -f "${INSTALLED}" ]; then
+    cp "${INSTALLED}" "${BIN_CACHE}"
+    echo "Claude Code binary cached to USB flash."
+  else
+    echo "WARNING: Could not download Claude Code binary."
+    echo "Update from the WebGUI or run: /usr/local/emhttp/plugins/claude-code/scripts/update-claude"
+  fi
+  rm -rf "${TMPHOME}"
+fi
+
+# Restore native install structure from USB cache
+if [ -f "${BIN_CACHE}" ]; then
+  VERSION=$("${BIN_CACHE}" --version 2>/dev/null | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' || echo "latest")
+  mkdir -p /root/.local/share/claude/versions
+  mkdir -p /root/.local/bin
+  cp "${BIN_CACHE}" "/root/.local/share/claude/versions/${VERSION}"
+  chmod 755 "/root/.local/share/claude/versions/${VERSION}"
+  ln -sf "/root/.local/share/claude/versions/${VERSION}" /root/.local/bin/claude
+  cp "${BIN_CACHE}" "${BIN_PATH}"
+  chmod 755 "${BIN_PATH}"
+  echo "Claude Code ${VERSION} installed"
+fi
+
+if ! grep -q '\.local/bin' /root/.bash_profile 2>/dev/null; then
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> /root/.bash_profile
+fi
+
+# Symlink /root/.claude/ to USB-persistent config directory
+if [ -L "/root/.claude" ]; then
+  CURRENT_TARGET=$(readlink -f /root/.claude)
+  if [ "${CURRENT_TARGET}" != "${CONFIG_DIR}" ]; then
+    rm -f /root/.claude
+    ln -s "${CONFIG_DIR}" /root/.claude
+  fi
+elif [ -d "/root/.claude" ]; then
+  echo "Migrating existing /root/.claude/ to USB flash..."
+  cp -a /root/.claude/. "${CONFIG_DIR}/"
+  rm -rf /root/.claude
+  ln -s "${CONFIG_DIR}" /root/.claude
+else
+  ln -s "${CONFIG_DIR}" /root/.claude
+fi
+
+echo "--- Claude Code plugin installed ---"
+</INLINE>
+</FILE>
+
+<!--
+removal script: remove binary and symlink, preserve USB config
+-->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+# Stop any running claude processes
+killall claude 2>/dev/null
+
+# Remove installed package
+removepkg &name;-&version;-x86_64-1 2>/dev/null
+
+# Remove binary from RAM
+rm -f /usr/local/bin/claude
+
+# Remove config symlink (but NOT the USB-persisted config data)
+[ -L "/root/.claude" ] &amp;&amp; rm -f /root/.claude
+
+# Remove cached package
+rm -f /boot/config/plugins/&name;/&plugin_pkg;
+
+echo "Claude Code plugin removed. Config preserved at /boot/config/plugins/&name;/"
+</INLINE>
+</FILE>
+
+</PLUGIN>

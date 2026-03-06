@@ -1,0 +1,266 @@
+Menu="Utilities"
+Title="Claude Code"
+Icon="fa-terminal"
+---
+<?PHP
+  $plugin = "claude-code";
+  $cfg = parse_plugin_cfg($plugin);
+  include_once("/usr/local/emhttp/plugins/{$plugin}/include/claude-code-api.php");
+  $version = getClaudeVersion();
+  $authStatus = getAuthStatus();
+  $claudeMd = getClaudeMd();
+  $settingsJson = getSettingsJson();
+  $skills = getSkillsList();
+  $csrf = _var($var,'csrf_token');
+?>
+
+<style>
+  .claude-tab-content { display: none; padding: 20px 0; }
+  .claude-tab-content.active { display: block; }
+  .claude-tabs { border-bottom: 1px solid #ccc; margin-bottom: 0; }
+  .claude-tabs button {
+    background: none; border: none; padding: 10px 20px; cursor: pointer;
+    font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .claude-tabs button.active { border-bottom-color: #FF6B35; font-weight: bold; }
+  .claude-status-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 13px; }
+  .claude-status-badge.ok { background: #d4edda; color: #155724; }
+  .claude-status-badge.warn { background: #fff3cd; color: #856404; }
+  .claude-status-badge.error { background: #f8d7da; color: #721c24; }
+  .claude-editor { width: 100%; min-height: 400px; font-family: monospace; font-size: 13px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: vertical; }
+  .claude-btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; margin-right: 8px; }
+  .claude-btn-primary { background: #FF6B35; color: white; }
+  .claude-btn-primary:hover { background: #e55a2b; }
+  .claude-btn-secondary { background: #6c757d; color: white; }
+  .claude-btn-secondary:hover { background: #5a6268; }
+  .claude-info-table td { padding: 6px 12px; }
+  .claude-info-table td:first-child { font-weight: bold; white-space: nowrap; }
+  .skill-item { padding: 8px; margin: 4px 0; background: #f8f9fa; border-radius: 4px; cursor: pointer; }
+  .skill-item:hover { background: #e9ecef; }
+  #claude-msg { margin: 10px 0; padding: 10px; border-radius: 4px; display: none; }
+</style>
+
+<div class="claude-tabs">
+  <button class="active" onclick="switchTab('status', this)">Status</button>
+  <button onclick="switchTab('config', this)">Configuration</button>
+  <button onclick="switchTab('skills', this)">Skills</button>
+</div>
+
+<!-- Status Tab -->
+<div id="tab-status" class="claude-tab-content active">
+  <table class="claude-info-table">
+    <tr>
+      <td>Install Status:</td>
+      <td id="claude-install-status">
+        <?if ($version):?>
+          <span class="claude-status-badge ok">Installed</span>
+        <?else:?>
+          <span class="claude-status-badge error">Not Installed</span>
+        <?endif;?>
+      </td>
+    </tr>
+    <tr>
+      <td>Version:</td>
+      <td id="claude-version"><?= htmlspecialchars($version ?: 'N/A') ?></td>
+    </tr>
+    <tr>
+      <td>Auth Status:</td>
+      <td id="claude-auth-status">
+        <?if ($authStatus):?>
+          <span class="claude-status-badge ok">Logged In</span>
+        <?else:?>
+          <span class="claude-status-badge warn">Not Logged In &mdash; run <code>claude login</code> via SSH</span>
+        <?endif;?>
+      </td>
+    </tr>
+    <tr>
+      <td>Binary Location:</td>
+      <td><code>/usr/local/bin/claude</code></td>
+    </tr>
+    <tr>
+      <td>Config Directory:</td>
+      <td><code>/root/.claude/</code> &rarr; <code>/boot/config/plugins/claude-code/claude-config/</code></td>
+    </tr>
+  </table>
+  <br>
+  <button class="claude-btn claude-btn-primary" onclick="launchClaude()">Launch Claude</button>
+  <form method="POST" action="/update.htm" target="progressFrame" style="display:inline">
+    <input type="hidden" name="csrf_token" value="<?=$csrf?>">
+    <input type="hidden" name="#command" value="/usr/local/emhttp/plugins/claude-code/scripts/update-claude">
+    <button type="submit" class="claude-btn claude-btn-secondary">Update Claude Code</button>
+  </form>
+</div>
+
+<!-- Configuration Tab -->
+<div id="tab-config" class="claude-tab-content">
+  <div id="claude-msg"></div>
+  <h3>Global CLAUDE.md</h3>
+  <p>Instructions that apply to all Claude Code sessions on this server.</p>
+  <textarea id="claude-md-editor" class="claude-editor"><?= htmlspecialchars($claudeMd) ?></textarea>
+  <br><br>
+  <button class="claude-btn claude-btn-primary" onclick="saveFile('claude-md')">Save CLAUDE.md</button>
+  <button class="claude-btn claude-btn-secondary" onclick="reloadFile('claude-md')">Revert</button>
+
+  <hr style="margin: 30px 0;">
+
+  <h3>Global Settings (settings.json)</h3>
+  <p>Claude Code global settings.</p>
+  <textarea id="settings-json-editor" class="claude-editor" style="min-height: 200px;"><?= htmlspecialchars($settingsJson) ?></textarea>
+  <br><br>
+  <button class="claude-btn claude-btn-primary" onclick="saveFile('settings-json')">Save settings.json</button>
+  <button class="claude-btn claude-btn-secondary" onclick="reloadFile('settings-json')">Revert</button>
+</div>
+
+<!-- Skills Tab -->
+<div id="tab-skills" class="claude-tab-content">
+  <h3>Installed Skills</h3>
+  <p>Skills from <code>~/.claude/plugins/</code></p>
+  <div id="skills-list">
+    <?if (empty($skills)):?>
+      <p>No skills installed.</p>
+    <?else:?>
+      <?foreach ($skills as $skill):?>
+        <div class="skill-item" onclick="loadSkill('<?= htmlspecialchars($skill['path']) ?>')">
+          <?= htmlspecialchars($skill['name']) ?>
+        </div>
+      <?endforeach;?>
+    <?endif;?>
+  </div>
+  <div id="skill-editor-container" style="display:none; margin-top: 20px;">
+    <h3>Editing: <span id="skill-name"></span></h3>
+    <textarea id="skill-editor" class="claude-editor"></textarea>
+    <br><br>
+    <button class="claude-btn claude-btn-primary" onclick="saveSkill()">Save Skill</button>
+    <button class="claude-btn claude-btn-secondary" onclick="closeSkillEditor()">Close</button>
+  </div>
+</div>
+
+<script>
+var csrfToken = '<?=$csrf?>';
+var apiUrl = '/plugins/claude-code/include/claude-code-api.php';
+
+function switchTab(tab, btn) {
+  document.querySelectorAll('.claude-tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.claude-tabs button').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
+  btn.classList.add('active');
+  if (tab === 'status') refreshStatus();
+}
+
+function refreshStatus() {
+  fetch(apiUrl + '?action=status')
+    .then(r => r.json())
+    .then(data => {
+      var installEl = document.getElementById('claude-install-status');
+      var versionEl = document.getElementById('claude-version');
+      var authEl = document.getElementById('claude-auth-status');
+      if (data.version) {
+        installEl.innerHTML = '<span class="claude-status-badge ok">Installed</span>';
+        versionEl.textContent = data.version;
+      } else {
+        installEl.innerHTML = '<span class="claude-status-badge error">Not Installed</span>';
+        versionEl.textContent = 'N/A';
+      }
+      if (data.authenticated) {
+        authEl.innerHTML = '<span class="claude-status-badge ok">Logged In</span>';
+      } else {
+        authEl.innerHTML = '<span class="claude-status-badge warn">Not Logged In — run <code>claude login</code> via SSH</span>';
+      }
+    })
+    .catch(function() {});
+}
+
+function showMsg(msg, type) {
+  var el = document.getElementById('claude-msg');
+  el.style.display = 'block';
+  el.className = 'claude-status-badge ' + type;
+  el.style.padding = '10px';
+  el.style.marginBottom = '10px';
+  el.textContent = msg;
+  setTimeout(function() { el.style.display = 'none'; }, 5000);
+}
+
+function saveFile(which) {
+  var content, action;
+  if (which === 'claude-md') {
+    content = document.getElementById('claude-md-editor').value;
+    action = 'save-claude-md';
+  } else {
+    content = document.getElementById('settings-json-editor').value;
+    action = 'save-settings-json';
+  }
+  fetch(apiUrl + '?action=' + action, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'content=' + encodeURIComponent(content)
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) showMsg('Saved successfully.', 'ok');
+      else showMsg('Save failed: ' + (data.error || 'Unknown error'), 'error');
+    })
+    .catch(err => showMsg('Save failed: ' + err, 'error'));
+}
+
+function reloadFile(which) {
+  var action = (which === 'claude-md') ? 'read-claude-md' : 'read-settings-json';
+  fetch(apiUrl + '?action=' + action)
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        if (which === 'claude-md') document.getElementById('claude-md-editor').value = data.content;
+        else document.getElementById('settings-json-editor').value = data.content;
+        showMsg('Reverted.', 'ok');
+      }
+    });
+}
+
+var currentSkillPath = '';
+
+function loadSkill(path) {
+  fetch(apiUrl + '?action=read-skill&path=' + encodeURIComponent(path))
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        currentSkillPath = path;
+        document.getElementById('skill-name').textContent = path.split('/').pop();
+        document.getElementById('skill-editor').value = data.content;
+        document.getElementById('skill-editor-container').style.display = 'block';
+      }
+    });
+}
+
+function saveSkill() {
+  fetch(apiUrl + '?action=save-skill', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'path=' + encodeURIComponent(currentSkillPath) + '&content=' + encodeURIComponent(document.getElementById('skill-editor').value)
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) showMsg('Skill saved.', 'ok');
+      else showMsg('Save failed: ' + (data.error || 'Unknown error'), 'error');
+    });
+}
+
+function closeSkillEditor() {
+  document.getElementById('skill-editor-container').style.display = 'none';
+  currentSkillPath = '';
+}
+
+function launchClaude() {
+  var w = window.open('', 'claude-code', 'width=1200,height=800');
+  if (!w) { alert('Pop-up blocked. Please allow pop-ups for this site.'); return; }
+  w.document.write('<html><head><title>Claude Code</title></head><body style="margin:0;background:#1a1a2e;color:#ccc;font-family:monospace;padding:20px;">Starting Claude Code...</body></html>');
+  fetch('/plugins/claude-code/include/open-claude.php').then(function() {
+    setTimeout(function() { w.location = '/webterminal/claude-code/'; w.focus(); }, 500);
+  });
+}
+
+// Auto-refresh status every 10 seconds when on the status tab
+setInterval(function() {
+  if (document.getElementById('tab-status').classList.contains('active')) {
+    refreshStatus();
+  }
+}, 10000);
+</script>

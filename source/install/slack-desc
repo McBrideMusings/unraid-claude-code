@@ -1,0 +1,10 @@
+claude-code: Claude Code for Unraid
+claude-code:
+claude-code: Claude Code is Anthropic's agentic coding tool that runs in
+claude-code: the terminal. This plugin installs Claude Code on Unraid with
+claude-code: persistent configuration and auth across reboots.
+claude-code:
+claude-code:
+claude-code:
+claude-code: https://claude.ai/code
+claude-code:

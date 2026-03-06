@@ -1,0 +1,84 @@
+#!/bin/bash
+#
+# Download and install Claude Code using the official process.
+# Handles the vfat/noexec workaround and caches the binary to USB flash.
+#
+
+set -e
+
+PLUGIN="claude-code"
+PLUGIN_DIR="/boot/config/plugins/${PLUGIN}"
+BIN_CACHE="${PLUGIN_DIR}/bin/claude"
+
+mkdir -p "${PLUGIN_DIR}/bin"
+
+echo "=== Claude Code Update ==="
+echo ""
+
+if command -v claude &>/dev/null; then
+  echo "Current version: $(claude --version 2>/dev/null || echo "unknown")"
+else
+  echo "No installation found."
+fi
+echo ""
+
+# Ensure ~/.local/bin is in PATH for the install process
+export PATH="$HOME/.local/bin:$PATH"
+
+# Ensure ~/.local/bin is in PATH for login shells
+if ! grep -q '\.local/bin' /root/.bash_profile 2>/dev/null; then
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> /root/.bash_profile
+fi
+
+# Run the official installer
+# HOME is real /root — the installer downloads to ~/.claude/downloads/ which is
+# symlinked to USB flash (vfat, noexec). The installer will fail to exec from there.
+# So we use a temp HOME for the download phase, then run `claude install` properly.
+TMPHOME=$(mktemp -d)
+echo "Downloading via official installer..."
+echo ""
+HOME="${TMPHOME}" curl -fsSL https://claude.ai/install.sh | HOME="${TMPHOME}" bash 2>&1 || true
+
+# Find the binary the installer placed
+INSTALLED="${TMPHOME}/.local/bin/claude"
+if [ -L "${INSTALLED}" ]; then
+  INSTALLED=$(readlink -f "${INSTALLED}")
+fi
+if [ ! -f "${INSTALLED}" ]; then
+  INSTALLED=$(find "${TMPHOME}" -name "claude" -type f -executable 2>/dev/null | head -1)
+fi
+
+if [ -z "${INSTALLED}" ] || [ ! -f "${INSTALLED}" ]; then
+  echo ""
+  echo "ERROR: Installer did not produce a binary."
+  rm -rf "${TMPHOME}"
+  exit 1
+fi
+
+# Cache to USB flash
+cp "${INSTALLED}" "${BIN_CACHE}"
+echo "Binary cached to USB flash."
+
+# Set up the native install structure in RAM
+mkdir -p /root/.local/share/claude/versions
+mkdir -p /root/.local/bin
+VERSION=$(echo "${INSTALLED}" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' || echo "latest")
+cp "${INSTALLED}" "/root/.local/share/claude/versions/${VERSION}"
+chmod 755 "/root/.local/share/claude/versions/${VERSION}"
+ln -sf "/root/.local/share/claude/versions/${VERSION}" /root/.local/bin/claude
+
+rm -rf "${TMPHOME}"
+
+# Also keep a copy at /usr/local/bin for PATH convenience
+cp "${BIN_CACHE}" /usr/local/bin/claude
+chmod 755 /usr/local/bin/claude
+
+# Run claude install to register shell integration properly
+echo ""
+echo "Registering installation..."
+claude install --force 2>&1 || true
+
+echo ""
+echo "Installed: $(claude --version 2>/dev/null || echo "unknown")"
+echo ""
+echo "=== Update complete ==="
