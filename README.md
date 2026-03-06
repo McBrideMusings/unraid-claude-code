@@ -30,17 +30,18 @@ claude
 ## Features
 
 - **Persistent binary** cached on USB flash, copied to RAM on boot
-- **Persistent config** via symlink from `/root/.claude/` to USB flash
-- **WebGUI page** at Settings > Claude Code for status, config editing, and skills browsing
-- **No boot delay** --- binary is only downloaded on first install or manual update, not every boot
+- **Persistent config** via symlink from `/root/.claude/` and `/root/.claude.json` to USB flash
+- **WebGUI page** at Utilities > Claude Code for status, config editing, and skills browsing
+- **Launch Claude** button opens a web terminal running Claude Code
+- **No boot delay** — binary is only downloaded on first install or manual update, not every boot
 
 ## WebGUI
 
-Navigate to **Settings > Claude Code** in the Unraid WebGUI:
+Navigate to **Utilities > Claude Code** in the Unraid WebGUI:
 
 | Tab | Description |
 |-----|-------------|
-| **Status** | Version, auth status, update button |
+| **Status** | Version, auth status, Launch Claude button, Update button |
 | **Configuration** | Edit global `CLAUDE.md` and `settings.json` |
 | **Skills** | View and edit installed skills |
 
@@ -53,6 +54,7 @@ All persistent data lives on the USB flash drive at `/boot/config/plugins/claude
 | `claude-code.cfg` | Plugin settings |
 | `bin/claude` | Cached binary |
 | `claude-config/` | Auth, memory, settings (symlink target for `~/.claude/`) |
+| `claude-config/.claude.json` | Workspace trust, onboarding state (symlink target for `~/.claude.json`) |
 
 Config is preserved across plugin updates and removals.
 
@@ -82,9 +84,10 @@ Config is preserved across plugin updates and removals.
 SCP files directly to the server without a full release:
 
 ```bash
-UNRAID_HOST=MyServer ./admin.sh deploy files    # Push source files only
-UNRAID_HOST=MyServer ./admin.sh deploy plg      # Push .plg and reinstall
-UNRAID_HOST=MyServer ./admin.sh deploy          # Both
+# Create .env with UNRAID_HOST=<your-server-ip>
+./admin.sh deploy      # Push source files (auto-registers if needed)
+./admin.sh clean       # Reset to fresh-install state
+./admin.sh uninstall   # Full removal
 ```
 
 ### Local build
@@ -111,6 +114,7 @@ The workflow builds the plugin `.txz`, creates a GitHub release, and patches the
 claude-code.plg                              # Plugin installer (XML)
 Makefile                                     # Local dev builds
 .github/workflows/release.yml               # CI/CD pipeline
+admin.sh                                    # Dev deploy script
 source/
 ├── install/
 │   ├── doinst.sh                           # Post-install setup
@@ -118,6 +122,13 @@ source/
 └── usr/local/emhttp/plugins/claude-code/
     ├── ClaudeCode.page                     # WebGUI page
     ├── default.cfg                         # Default config template
-    └── include/
-        └── claude-code-api.php             # Backend API
+    ├── default-claude.md                   # Default CLAUDE.md template
+    ├── images/
+    │   ├── claude-code.png                 # Plugin icon
+    │   └── claude-code.svg                 # Plugin icon (source)
+    ├── include/
+    │   ├── claude-code-api.php             # Backend API
+    │   └── open-claude.php                 # Web terminal launcher
+    └── scripts/
+        └── update-claude                   # Binary update script
 ```
