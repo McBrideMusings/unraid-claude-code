@@ -1,6 +1,6 @@
 Menu="Utilities"
 Title="Claude Code"
-Icon="fa-terminal"
+Icon="claude-code.png"
 ---
 <?PHP
   $plugin = "claude-code";

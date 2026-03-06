@@ -82,6 +82,30 @@ if ! grep -q '\.local/bin' /root/.bash_profile 2>/dev/null; then
 fi
 
 
+# Symlink /root/.claude.json to USB-persistent copy
+if [ -f "/root/.claude.json" ] && [ ! -L "/root/.claude.json" ]; then
+  cp /root/.claude.json "${CONFIG_DIR}/.claude.json" 2>/dev/null || true
+fi
+if [ -f "${CONFIG_DIR}/.claude.json" ]; then
+  ln -sf "${CONFIG_DIR}/.claude.json" /root/.claude.json
+else
+  touch "${CONFIG_DIR}/.claude.json"
+  ln -sf "${CONFIG_DIR}/.claude.json" /root/.claude.json
+fi
+
+# Pre-accept workspace trust for /root
+if [ -f "${CONFIG_DIR}/.claude.json" ] && command -v python3 &>/dev/null; then
+  python3 -c "
+import json, os
+p = '${CONFIG_DIR}/.claude.json'
+try:
+    d = json.load(open(p)) if os.path.getsize(p) > 0 else {}
+except: d = {}
+d.setdefault('projects', {}).setdefault('/root', {})['hasTrustDialogAccepted'] = True
+json.dump(d, open(p, 'w'), indent=2)
+" 2>/dev/null || true
+fi
+
 if [ -L "/root/.claude" ]; then
   CURRENT_TARGET=$(readlink -f /root/.claude)
   if [ "${CURRENT_TARGET}" != "${CONFIG_DIR}" ]; then

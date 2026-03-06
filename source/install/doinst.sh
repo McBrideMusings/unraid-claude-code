@@ -19,6 +19,32 @@ if [ ! -f "${CONFIG_DIR}/CLAUDE.md" ]; then
   cp /usr/local/emhttp/plugins/${PLUGIN_NAME}/default-claude.md "${CONFIG_DIR}/CLAUDE.md" 2>/dev/null || true
 fi
 
+# Symlink /root/.claude.json to USB-persistent copy
+if [ -f "/root/.claude.json" ] && [ ! -L "/root/.claude.json" ]; then
+  cp /root/.claude.json "${CONFIG_DIR}/.claude.json" 2>/dev/null || true
+fi
+if [ -f "${CONFIG_DIR}/.claude.json" ]; then
+  ln -sf "${CONFIG_DIR}/.claude.json" /root/.claude.json
+else
+  touch "${CONFIG_DIR}/.claude.json"
+  ln -sf "${CONFIG_DIR}/.claude.json" /root/.claude.json
+fi
+
+# Pre-accept workspace trust for /root (Claude Code doesn't persist this on its own)
+if [ -f "${CONFIG_DIR}/.claude.json" ]; then
+  if command -v python3 &>/dev/null; then
+    python3 -c "
+import json, os
+p = '${CONFIG_DIR}/.claude.json'
+try:
+    d = json.load(open(p)) if os.path.getsize(p) > 0 else {}
+except: d = {}
+d.setdefault('projects', {}).setdefault('/root', {})['hasTrustDialogAccepted'] = True
+json.dump(d, open(p, 'w'), indent=2)
+" 2>/dev/null || true
+  fi
+fi
+
 # Symlink /root/.claude/ to USB-persistent config directory
 if [ -L "/root/.claude" ]; then
   CURRENT_TARGET=$(readlink -f /root/.claude)
