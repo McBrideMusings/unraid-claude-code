@@ -8,6 +8,8 @@ BIN_CACHE="${PLUGIN_DIR}/bin/claude"
 # Create persistent directories on USB flash
 mkdir -p "${PLUGIN_DIR}/bin"
 mkdir -p "${CONFIG_DIR}"
+mkdir -p "${CONFIG_DIR}/skills"
+mkdir -p "${CONFIG_DIR}/commands"
 
 # Create default config if missing
 if [ ! -f "${PLUGIN_DIR}/${PLUGIN_NAME}.cfg" ]; then

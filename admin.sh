@@ -54,6 +54,8 @@ CONFIG_DIR="${PLUGIN_DIR}/claude-config"
 
 mkdir -p "${PLUGIN_DIR}/bin"
 mkdir -p "${CONFIG_DIR}"
+mkdir -p "${CONFIG_DIR}/skills"
+mkdir -p "${CONFIG_DIR}/commands"
 
 if [ ! -f "${PLUGIN_DIR}/${PLUGIN}.cfg" ]; then
   cp /usr/local/emhttp/plugins/${PLUGIN}/default.cfg "${PLUGIN_DIR}/${PLUGIN}.cfg" 2>/dev/null || true

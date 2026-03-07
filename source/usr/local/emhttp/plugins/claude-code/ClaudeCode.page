@@ -11,6 +11,7 @@ Icon="claude-code.png"
   $claudeMd = getClaudeMd();
   $settingsJson = getSettingsJson();
   $skills = getSkillsList();
+  $commands = getCommandsList();
   $csrf = _var($var,'csrf_token');
 ?>
 
@@ -33,17 +34,26 @@ Icon="claude-code.png"
   .claude-btn-primary:hover { background: #e55a2b; }
   .claude-btn-secondary { background: #6c757d; color: white; }
   .claude-btn-secondary:hover { background: #5a6268; }
+  .claude-btn-danger { background: #dc3545; color: white; }
+  .claude-btn-danger:hover { background: #c82333; }
   .claude-info-table td { padding: 6px 12px; }
   .claude-info-table td:first-child { font-weight: bold; white-space: nowrap; }
-  .skill-item { padding: 8px; margin: 4px 0; background: #f8f9fa; border-radius: 4px; cursor: pointer; }
-  .skill-item:hover { background: #e9ecef; }
+  .file-item { padding: 8px 12px; margin: 4px 0; background: #f8f9fa; border-radius: 4px; cursor: pointer; }
+  .file-item:hover { background: #e9ecef; }
+  .file-item-name { font-weight: bold; }
+  .file-item-desc { font-size: 12px; color: #6c757d; margin-top: 2px; }
+  .section-header { display: flex; align-items: center; gap: 12px; }
+  .section-header h3 { margin: 0; }
   #claude-msg { margin: 10px 0; padding: 10px; border-radius: 4px; display: none; }
 </style>
 
+<div id="claude-msg"></div>
+
 <div class="claude-tabs">
-  <button class="active" onclick="switchTab('status', this)">Status</button>
-  <button onclick="switchTab('config', this)">Configuration</button>
-  <button onclick="switchTab('skills', this)">Skills</button>
+  <button class="active" onclick="claudeSwitchTab('status', this)">Status</button>
+  <button onclick="claudeSwitchTab('config', this)">Configuration</button>
+  <button onclick="claudeSwitchTab('skills', this)">Skills</button>
+  <button onclick="claudeSwitchTab('commands', this)">Commands</button>
 </div>
 
 <!-- Status Tab -->
@@ -100,13 +110,12 @@ Icon="claude-code.png"
 
 <!-- Configuration Tab -->
 <div id="tab-config" class="claude-tab-content">
-  <div id="claude-msg"></div>
   <h3>Global CLAUDE.md</h3>
   <p>Instructions that apply to all Claude Code sessions on this server.</p>
   <textarea id="claude-md-editor" class="claude-editor"><?= htmlspecialchars($claudeMd) ?></textarea>
   <br><br>
-  <button class="claude-btn claude-btn-primary" onclick="saveFile('claude-md')">Save CLAUDE.md</button>
-  <button class="claude-btn claude-btn-secondary" onclick="reloadFile('claude-md')">Revert</button>
+  <button class="claude-btn claude-btn-primary" onclick="saveConfigFile('claude-md')">Save CLAUDE.md</button>
+  <button class="claude-btn claude-btn-secondary" onclick="reloadConfigFile('claude-md')">Revert</button>
 
   <hr style="margin: 30px 0;">
 
@@ -114,50 +123,88 @@ Icon="claude-code.png"
   <p>Claude Code global settings.</p>
   <textarea id="settings-json-editor" class="claude-editor" style="min-height: 200px;"><?= htmlspecialchars($settingsJson) ?></textarea>
   <br><br>
-  <button class="claude-btn claude-btn-primary" onclick="saveFile('settings-json')">Save settings.json</button>
-  <button class="claude-btn claude-btn-secondary" onclick="reloadFile('settings-json')">Revert</button>
+  <button class="claude-btn claude-btn-primary" onclick="saveConfigFile('settings-json')">Save settings.json</button>
+  <button class="claude-btn claude-btn-secondary" onclick="reloadConfigFile('settings-json')">Revert</button>
 </div>
 
 <!-- Skills Tab -->
 <div id="tab-skills" class="claude-tab-content">
-  <h3>Installed Skills</h3>
-  <p>Skills from <code>~/.claude/plugins/</code></p>
-  <div id="skills-list">
+  <div class="section-header">
+    <h3>Skills</h3>
+    <button class="claude-btn claude-btn-primary" style="padding:4px 12px; font-size:13px;" onclick="claudeCreateFile('skill')">+ New Skill</button>
+  </div>
+  <p>Custom skills from <code>~/.claude/skills/</code></p>
+  <div id="skill-list">
     <?if (empty($skills)):?>
-      <p>No skills installed.</p>
+      <p class="file-list-empty">No skills yet.</p>
     <?else:?>
-      <?foreach ($skills as $skill):?>
-        <div class="skill-item" onclick="loadSkill('<?= htmlspecialchars($skill['path']) ?>')">
-          <?= htmlspecialchars($skill['name']) ?>
+      <?foreach ($skills as $s):?>
+        <div class="file-item" onclick="claudeLoadFile('skill','<?= htmlspecialchars($s['path']) ?>')">
+          <div class="file-item-name"><?= htmlspecialchars($s['filename']) ?></div>
+          <?if ($s['description']):?>
+            <div class="file-item-desc"><?= htmlspecialchars($s['description']) ?></div>
+          <?endif;?>
         </div>
       <?endforeach;?>
     <?endif;?>
   </div>
-  <div id="skill-editor-container" style="display:none; margin-top: 20px;">
-    <h3>Editing: <span id="skill-name"></span></h3>
+  <div id="skill-editor-container" class="claude-file-editor" style="display:none; margin-top: 20px;">
+    <h3>Editing: <span id="skill-edit-name"></span></h3>
     <textarea id="skill-editor" class="claude-editor"></textarea>
     <br><br>
-    <button class="claude-btn claude-btn-primary" onclick="saveSkill()">Save Skill</button>
-    <button class="claude-btn claude-btn-secondary" onclick="closeSkillEditor()">Close</button>
+    <button class="claude-btn claude-btn-primary" onclick="claudeSaveFile('skill')">Save</button>
+    <button class="claude-btn claude-btn-danger" onclick="claudeDeleteFile('skill')">Delete</button>
+    <button class="claude-btn claude-btn-secondary" onclick="claudeCloseEditor('skill')">Close</button>
+  </div>
+</div>
+
+<!-- Commands Tab -->
+<div id="tab-commands" class="claude-tab-content">
+  <div class="section-header">
+    <h3>Commands</h3>
+    <button class="claude-btn claude-btn-primary" style="padding:4px 12px; font-size:13px;" onclick="claudeCreateFile('command')">+ New Command</button>
+  </div>
+  <p>Custom commands from <code>~/.claude/commands/</code></p>
+  <div id="command-list">
+    <?if (empty($commands)):?>
+      <p class="file-list-empty">No commands yet.</p>
+    <?else:?>
+      <?foreach ($commands as $c):?>
+        <div class="file-item" onclick="claudeLoadFile('command','<?= htmlspecialchars($c['path']) ?>')">
+          <div class="file-item-name"><?= htmlspecialchars($c['filename']) ?></div>
+          <?if ($c['description']):?>
+            <div class="file-item-desc"><?= htmlspecialchars($c['description']) ?></div>
+          <?endif;?>
+        </div>
+      <?endforeach;?>
+    <?endif;?>
+  </div>
+  <div id="command-editor-container" class="claude-file-editor" style="display:none; margin-top: 20px;">
+    <h3>Editing: <span id="command-edit-name"></span></h3>
+    <textarea id="command-editor" class="claude-editor"></textarea>
+    <br><br>
+    <button class="claude-btn claude-btn-primary" onclick="claudeSaveFile('command')">Save</button>
+    <button class="claude-btn claude-btn-danger" onclick="claudeDeleteFile('command')">Delete</button>
+    <button class="claude-btn claude-btn-secondary" onclick="claudeCloseEditor('command')">Close</button>
   </div>
 </div>
 
 <script>
-var csrfToken = '<?=$csrf?>';
-var apiUrl = '/plugins/claude-code/include/claude-code-api.php';
+var claudeApiUrl = '/plugins/claude-code/include/claude-code-api.php';
+var claudeCurrentPath = {skill: '', command: ''};
 
-function switchTab(tab, btn) {
-  document.querySelectorAll('.claude-tab-content').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.claude-tabs button').forEach(el => el.classList.remove('active'));
+function claudeSwitchTab(tab, btn) {
+  document.querySelectorAll('.claude-tab-content').forEach(function(el) { el.classList.remove('active'); });
+  document.querySelectorAll('.claude-tabs button').forEach(function(el) { el.classList.remove('active'); });
   document.getElementById('tab-' + tab).classList.add('active');
   btn.classList.add('active');
-  if (tab === 'status') refreshStatus();
+  if (tab === 'status') claudeRefreshStatus();
 }
 
-function refreshStatus() {
-  fetch(apiUrl + '?action=status')
-    .then(r => r.json())
-    .then(data => {
+function claudeRefreshStatus() {
+  fetch(claudeApiUrl + '?action=status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
       var installEl = document.getElementById('claude-install-status');
       var versionEl = document.getElementById('claude-version');
       var authEl = document.getElementById('claude-auth-status');
@@ -177,7 +224,7 @@ function refreshStatus() {
     .catch(function() {});
 }
 
-function showMsg(msg, type) {
+function claudeShowMsg(msg, type) {
   var el = document.getElementById('claude-msg');
   el.style.display = 'block';
   el.className = 'claude-status-badge ' + type;
@@ -187,7 +234,7 @@ function showMsg(msg, type) {
   setTimeout(function() { el.style.display = 'none'; }, 5000);
 }
 
-function saveFile(which) {
+function saveConfigFile(which) {
   var content, action;
   if (which === 'claude-md') {
     content = document.getElementById('claude-md-editor').value;
@@ -196,63 +243,141 @@ function saveFile(which) {
     content = document.getElementById('settings-json-editor').value;
     action = 'save-settings-json';
   }
-  fetch(apiUrl + '?action=' + action, {
+  fetch(claudeApiUrl + '?action=' + action, {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
     body: 'content=' + encodeURIComponent(content)
   })
-    .then(r => r.json())
-    .then(data => {
-      if (data.success) showMsg('Saved successfully.', 'ok');
-      else showMsg('Save failed: ' + (data.error || 'Unknown error'), 'error');
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) claudeShowMsg('Saved successfully.', 'ok');
+      else claudeShowMsg('Save failed: ' + (data.error || 'Unknown error'), 'error');
     })
-    .catch(err => showMsg('Save failed: ' + err, 'error'));
+    .catch(function(err) { claudeShowMsg('Save failed: ' + err, 'error'); });
 }
 
-function reloadFile(which) {
+function reloadConfigFile(which) {
   var action = (which === 'claude-md') ? 'read-claude-md' : 'read-settings-json';
-  fetch(apiUrl + '?action=' + action)
-    .then(r => r.json())
-    .then(data => {
+  fetch(claudeApiUrl + '?action=' + action)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
       if (data.success) {
         if (which === 'claude-md') document.getElementById('claude-md-editor').value = data.content;
         else document.getElementById('settings-json-editor').value = data.content;
-        showMsg('Reverted.', 'ok');
+        claudeShowMsg('Reverted.', 'ok');
       }
     });
 }
 
-var currentSkillPath = '';
-
-function loadSkill(path) {
-  fetch(apiUrl + '?action=read-skill&path=' + encodeURIComponent(path))
-    .then(r => r.json())
-    .then(data => {
-      if (data.success) {
-        currentSkillPath = path;
-        document.getElementById('skill-name').textContent = path.split('/').pop();
-        document.getElementById('skill-editor').value = data.content;
-        document.getElementById('skill-editor-container').style.display = 'block';
-      }
-    });
-}
-
-function saveSkill() {
-  fetch(apiUrl + '?action=save-skill', {
+function claudeCreateFile(type) {
+  var name = prompt('Enter ' + type + ' filename (lowercase, hyphens allowed):');
+  if (!name) return;
+  fetch(claudeApiUrl + '?action=create-file', {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: 'path=' + encodeURIComponent(currentSkillPath) + '&content=' + encodeURIComponent(document.getElementById('skill-editor').value)
+    body: 'type=' + encodeURIComponent(type) + '&name=' + encodeURIComponent(name)
   })
-    .then(r => r.json())
-    .then(data => {
-      if (data.success) showMsg('Skill saved.', 'ok');
-      else showMsg('Save failed: ' + (data.error || 'Unknown error'), 'error');
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        claudeRefreshList(type);
+        claudeCurrentPath[type] = data.path;
+        document.getElementById(type + '-edit-name').textContent = data.path.split('/').pop();
+        document.getElementById(type + '-editor').value = data.content;
+        document.getElementById(type + '-editor-container').style.display = 'block';
+      } else {
+        claudeShowMsg('Create failed: ' + (data.error || 'Unknown error'), 'error');
+      }
+    })
+    .catch(function(err) { claudeShowMsg('Create failed: ' + err, 'error'); });
+}
+
+function claudeLoadFile(type, path) {
+  fetch(claudeApiUrl + '?action=read-file&type=' + encodeURIComponent(type) + '&path=' + encodeURIComponent(path))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        claudeCurrentPath[type] = path;
+        document.getElementById(type + '-edit-name').textContent = path.split('/').pop();
+        document.getElementById(type + '-editor').value = data.content;
+        document.getElementById(type + '-editor-container').style.display = 'block';
+      }
     });
 }
 
-function closeSkillEditor() {
-  document.getElementById('skill-editor-container').style.display = 'none';
-  currentSkillPath = '';
+function claudeSaveFile(type) {
+  var path = claudeCurrentPath[type];
+  var content = document.getElementById(type + '-editor').value;
+  fetch(claudeApiUrl + '?action=save-file', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'type=' + encodeURIComponent(type) + '&path=' + encodeURIComponent(path) + '&content=' + encodeURIComponent(content)
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        claudeShowMsg('Saved.', 'ok');
+        claudeRefreshList(type);
+      } else {
+        claudeShowMsg('Save failed: ' + (data.error || 'Unknown error'), 'error');
+      }
+    })
+    .catch(function(err) { claudeShowMsg('Save failed: ' + err, 'error'); });
+}
+
+function claudeDeleteFile(type) {
+  if (!confirm('Delete this file? This cannot be undone.')) return;
+  var path = claudeCurrentPath[type];
+  fetch(claudeApiUrl + '?action=delete-file', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: 'type=' + encodeURIComponent(type) + '&path=' + encodeURIComponent(path)
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        claudeShowMsg('Deleted.', 'ok');
+        claudeRefreshList(type);
+        claudeCloseEditor(type);
+      } else {
+        claudeShowMsg('Delete failed: ' + (data.error || 'Unknown error'), 'error');
+      }
+    })
+    .catch(function(err) { claudeShowMsg('Delete failed: ' + err, 'error'); });
+}
+
+function claudeCloseEditor(type) {
+  document.getElementById(type + '-editor-container').style.display = 'none';
+  claudeCurrentPath[type] = '';
+}
+
+function claudeRefreshList(type) {
+  fetch(claudeApiUrl + '?action=list-files&type=' + encodeURIComponent(type))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.success) return;
+      var container = document.getElementById(type + '-list');
+      if (data.files.length === 0) {
+        container.innerHTML = '<p class="file-list-empty">No ' + type + 's yet.</p>';
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < data.files.length; i++) {
+        var f = data.files[i];
+        var safePath = f.path.replace(/'/g, "\\'");
+        html += '<div class="file-item" onclick="claudeLoadFile(\'' + type + '\',\'' + safePath + '\')">';
+        html += '<div class="file-item-name">' + claudeEscHtml(f.filename) + '</div>';
+        if (f.description) html += '<div class="file-item-desc">' + claudeEscHtml(f.description) + '</div>';
+        html += '</div>';
+      }
+      container.innerHTML = html;
+    });
+}
+
+function claudeEscHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
 }
 
 function launchClaude() {
@@ -264,10 +389,9 @@ function launchClaude() {
   });
 }
 
-// Auto-refresh status every 10 seconds when on the status tab
 setInterval(function() {
   if (document.getElementById('tab-status').classList.contains('active')) {
-    refreshStatus();
+    claudeRefreshStatus();
   }
 }, 10000);
 </script>

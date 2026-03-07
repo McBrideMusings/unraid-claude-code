@@ -15,8 +15,8 @@ This is an Unraid plugin that installs Claude Code CLI with persistence across r
 ## Key Files
 
 - `source/install/doinst.sh` — Boot-time setup: symlinks config, restores binary from USB cache, sets PATH, pre-accepts workspace trust.
-- `source/usr/local/emhttp/plugins/claude-code/ClaudeCode.page` — WebGUI page (Status, Configuration, Skills tabs).
-- `source/usr/local/emhttp/plugins/claude-code/include/claude-code-api.php` — PHP backend API for status checks, file editing, updates.
+- `source/usr/local/emhttp/plugins/claude-code/ClaudeCode.page` — WebGUI page (Status, Configuration, Skills, Commands tabs).
+- `source/usr/local/emhttp/plugins/claude-code/include/claude-code-api.php` — PHP backend API for status checks, file editing, skills/commands CRUD, updates.
 - `source/usr/local/emhttp/plugins/claude-code/include/open-claude.php` — Spawns ttyd web terminal running `claude`.
 - `source/usr/local/emhttp/plugins/claude-code/scripts/update-claude` — Downloads Claude Code via official installer with vfat workaround.
 - `source/usr/local/emhttp/plugins/claude-code/images/claude-code.png` — Plugin icon (from lobehub/lobe-icons).
@@ -28,10 +28,11 @@ This is an Unraid plugin that installs Claude Code CLI with persistence across r
 - The `.plg` downloads pre-built `.txz` packages from GitHub Releases — it does NOT inline file contents.
 - Binary download happens at install time on the Unraid server (not at build time) because Claude Code doesn't publish static release binaries.
 - The official installer (`curl -fsSL https://claude.ai/install.sh | bash`) is used with a tmpdir HOME workaround because USB flash is vfat (noexec).
+- WebGUI JS functions must be prefixed with `claude` (e.g., `claudeSwitchTab`) to avoid colliding with Unraid's global JS namespace.
 
 ## Persistence Details
 
-- `/root/.claude/` → symlink to `/boot/config/plugins/claude-code/claude-config/` (auth tokens, settings, memory, skills)
+- `/root/.claude/` → symlink to `/boot/config/plugins/claude-code/claude-config/` (auth tokens, settings, memory, skills, commands)
 - `/root/.claude.json` → symlink to USB-persistent copy (workspace trust, onboarding state, cached features)
 - Binary cached at `/boot/config/plugins/claude-code/bin/claude`, copied to RAM at `/usr/local/bin/claude` and native structure at `~/.local/share/claude/versions/<ver>`
 - PATH export added to `/root/.bash_profile` (login shells) and `/etc/profile.d/claude-code.sh` (all shells, RAM-based, recreated on boot)

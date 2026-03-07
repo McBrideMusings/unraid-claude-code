@@ -43,24 +43,58 @@ function getSettingsJson() {
   return "{}";
 }
 
-function getSkillsList() {
-  global $CONFIG_DIR;
-  $skills = [];
-  $pluginsDir = "{$CONFIG_DIR}/plugins";
-  if (!is_dir($pluginsDir)) return $skills;
-
-  $iterator = new RecursiveIteratorIterator(
-    new RecursiveDirectoryIterator($pluginsDir, RecursiveDirectoryIterator::SKIP_DOTS)
-  );
-  foreach ($iterator as $file) {
-    if ($file->isFile() && $file->getExtension() === 'md') {
-      $skills[] = [
-        'name' => $file->getFilename(),
-        'path' => $file->getPathname()
-      ];
-    }
+function parseFrontMatter($content) {
+  $result = ['name' => '', 'description' => ''];
+  if (preg_match('/\A---\s*\n(.*?)\n---/s', $content, $m)) {
+    if (preg_match('/^name:\s*(.+)$/m', $m[1], $n)) $result['name'] = trim($n[1]);
+    if (preg_match('/^description:\s*(.+)$/m', $m[1], $d)) $result['description'] = trim($d[1]);
   }
-  return $skills;
+  return $result;
+}
+
+function sanitizeFilename($name) {
+  $name = strtolower(trim($name));
+  $name = preg_replace('/[^a-z0-9\-]/', '-', $name);
+  $name = preg_replace('/-+/', '-', $name);
+  $name = trim($name, '-');
+  if (!$name) return false;
+  if (substr($name, -3) !== '.md') $name .= '.md';
+  return $name;
+}
+
+function getFileTypeDir($type) {
+  global $CONFIG_DIR;
+  $dirs = [
+    'skill' => "{$CONFIG_DIR}/skills",
+    'command' => "{$CONFIG_DIR}/commands",
+  ];
+  return $dirs[$type] ?? false;
+}
+
+function listFiles($type) {
+  $dir = getFileTypeDir($type);
+  if (!$dir || !is_dir($dir)) return [];
+  $files = [];
+  foreach (glob("{$dir}/*.md") as $path) {
+    $content = file_get_contents($path);
+    $fm = parseFrontMatter($content);
+    $files[] = [
+      'filename' => basename($path),
+      'path' => $path,
+      'name' => $fm['name'] ?: basename($path, '.md'),
+      'description' => $fm['description'],
+    ];
+  }
+  usort($files, function($a, $b) { return strcasecmp($a['filename'], $b['filename']); });
+  return $files;
+}
+
+function getSkillsList() {
+  return listFiles('skill');
+}
+
+function getCommandsList() {
+  return listFiles('command');
 }
 
 function updateClaudeBinary() {
@@ -115,12 +149,91 @@ if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'claude-code-api.php' && iss
       echo json_encode(['success' => true, 'content' => getSettingsJson()]);
       break;
 
+    case 'list-files':
+      $type = $_GET['type'] ?? '';
+      if (!in_array($type, ['skill', 'command'])) {
+        echo json_encode(['success' => false, 'error' => 'Invalid type']);
+        break;
+      }
+      echo json_encode(['success' => true, 'files' => listFiles($type)]);
+      break;
+
+    case 'read-file':
+      $type = $_GET['type'] ?? '';
+      $path = $_GET['path'] ?? '';
+      $baseDir = getFileTypeDir($type);
+      if (!$baseDir) { echo json_encode(['success' => false, 'error' => 'Invalid type']); break; }
+      $realPath = realpath($path);
+      $realBase = realpath($baseDir);
+      if ($realPath && $realBase && strpos($realPath, $realBase) === 0) {
+        echo json_encode(['success' => true, 'content' => file_get_contents($realPath)]);
+      } else {
+        echo json_encode(['success' => false, 'error' => 'Invalid path']);
+      }
+      break;
+
+    case 'create-file':
+      $type = $_POST['type'] ?? '';
+      $name = $_POST['name'] ?? '';
+      $baseDir = getFileTypeDir($type);
+      if (!$baseDir) { echo json_encode(['success' => false, 'error' => 'Invalid type']); break; }
+      $filename = sanitizeFilename($name);
+      if (!$filename) { echo json_encode(['success' => false, 'error' => 'Invalid filename']); break; }
+      if (!is_dir($baseDir)) mkdir($baseDir, 0755, true);
+      $filePath = "{$baseDir}/{$filename}";
+      if (file_exists($filePath)) { echo json_encode(['success' => false, 'error' => 'File already exists']); break; }
+      $displayName = basename($filename, '.md');
+      $ucName = ucfirst(str_replace('-', ' ', $displayName));
+      if ($type === 'command') {
+        $template = "---\nname: {$displayName}\ndescription: Describe what this command does\nuser_invocable: true\n---\n\n# {$ucName}\n\nCommand instructions go here.\n";
+      } else {
+        $template = "---\nname: {$displayName}\ndescription: Describe when this skill should be used\n---\n\n# {$ucName}\n\nSkill instructions go here.\n";
+      }
+      $ok = file_put_contents($filePath, $template);
+      echo json_encode(['success' => $ok !== false, 'path' => $filePath, 'content' => $template]);
+      break;
+
+    case 'save-file':
+      $type = $_POST['type'] ?? '';
+      $path = $_POST['path'] ?? '';
+      $content = $_POST['content'] ?? '';
+      $baseDir = getFileTypeDir($type);
+      if (!$baseDir) { echo json_encode(['success' => false, 'error' => 'Invalid type']); break; }
+      $realPath = realpath($path);
+      $realBase = realpath($baseDir);
+      if ($realPath && $realBase && strpos($realPath, $realBase) === 0) {
+        $ok = file_put_contents($realPath, $content);
+        echo json_encode(['success' => $ok !== false]);
+      } else {
+        echo json_encode(['success' => false, 'error' => 'Invalid path']);
+      }
+      break;
+
+    case 'delete-file':
+      $type = $_POST['type'] ?? '';
+      $path = $_POST['path'] ?? '';
+      $baseDir = getFileTypeDir($type);
+      if (!$baseDir) { echo json_encode(['success' => false, 'error' => 'Invalid type']); break; }
+      $realPath = realpath($path);
+      $realBase = realpath($baseDir);
+      if ($realPath && $realBase && strpos($realPath, $realBase) === 0) {
+        $ok = unlink($realPath);
+        echo json_encode(['success' => $ok]);
+      } else {
+        echo json_encode(['success' => false, 'error' => 'Invalid path']);
+      }
+      break;
+
+    // Legacy endpoints for backward compatibility
     case 'read-skill':
       $path = $_GET['path'] ?? '';
-      // Security: only allow reading from the plugins directory
       $realPath = realpath($path);
-      $allowedBase = realpath("{$CONFIG_DIR}/plugins");
-      if ($realPath && $allowedBase && strpos($realPath, $allowedBase) === 0) {
+      $allowedBases = [realpath("{$CONFIG_DIR}/plugins"), realpath("{$CONFIG_DIR}/skills")];
+      $valid = false;
+      foreach ($allowedBases as $base) {
+        if ($realPath && $base && strpos($realPath, $base) === 0) { $valid = true; break; }
+      }
+      if ($valid) {
         echo json_encode(['success' => true, 'content' => file_get_contents($realPath)]);
       } else {
         echo json_encode(['success' => false, 'error' => 'Invalid path']);
@@ -131,8 +244,12 @@ if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'claude-code-api.php' && iss
       $path = $_POST['path'] ?? '';
       $content = $_POST['content'] ?? '';
       $realPath = realpath($path);
-      $allowedBase = realpath("{$CONFIG_DIR}/plugins");
-      if ($realPath && $allowedBase && strpos($realPath, $allowedBase) === 0) {
+      $allowedBases = [realpath("{$CONFIG_DIR}/plugins"), realpath("{$CONFIG_DIR}/skills")];
+      $valid = false;
+      foreach ($allowedBases as $base) {
+        if ($realPath && $base && strpos($realPath, $base) === 0) { $valid = true; break; }
+      }
+      if ($valid) {
         $ok = file_put_contents($realPath, $content);
         echo json_encode(['success' => $ok !== false]);
       } else {
