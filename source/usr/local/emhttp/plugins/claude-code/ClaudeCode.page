@@ -45,6 +45,13 @@ Icon="claude-code.png"
   .section-header { display: flex; align-items: center; gap: 12px; }
   .section-header h3 { margin: 0; }
   #claude-msg { margin: 10px 0; padding: 10px; border-radius: 4px; display: none; }
+  .claude-doc-links { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .claude-doc-links a {
+    display: inline-block; padding: 4px 12px; font-size: 13px;
+    background: #f0f0f0; border: 1px solid #ccc; border-radius: 4px;
+    color: #333; text-decoration: none;
+  }
+  .claude-doc-links a:hover { background: #e0e0e0; }
 </style>
 
 <div id="claude-msg"></div>
@@ -110,8 +117,14 @@ Icon="claude-code.png"
 
 <!-- Configuration Tab -->
 <div id="tab-config" class="claude-tab-content">
+  <div class="claude-doc-links">
+    <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Claude Code Docs ↗</a>
+    <a href="https://docs.anthropic.com/en/docs/claude-code/settings" target="_blank">Settings Reference ↗</a>
+    <a href="https://docs.anthropic.com/en/docs/claude-code/memory" target="_blank">CLAUDE.md & Memory ↗</a>
+    <a href="https://docs.anthropic.com/en/docs/claude-code/skills" target="_blank">Skills & Commands ↗</a>
+  </div>
   <h3>Global CLAUDE.md</h3>
-  <p>Instructions that apply to all Claude Code sessions on this server.</p>
+  <p>Instructions that apply to all Claude Code sessions on this server. <a href="https://docs.anthropic.com/en/docs/claude-code/memory" target="_blank">Learn more ↗</a></p>
   <textarea id="claude-md-editor" class="claude-editor"><?= htmlspecialchars($claudeMd) ?></textarea>
   <br><br>
   <button class="claude-btn claude-btn-primary" onclick="saveConfigFile('claude-md')">Save CLAUDE.md</button>
@@ -120,7 +133,7 @@ Icon="claude-code.png"
   <hr style="margin: 30px 0;">
 
   <h3>Global Settings (settings.json)</h3>
-  <p>Claude Code global settings.</p>
+  <p>Claude Code global settings. <a href="https://docs.anthropic.com/en/docs/claude-code/settings" target="_blank">Settings reference ↗</a></p>
   <textarea id="settings-json-editor" class="claude-editor" style="min-height: 200px;"><?= htmlspecialchars($settingsJson) ?></textarea>
   <br><br>
   <button class="claude-btn claude-btn-primary" onclick="saveConfigFile('settings-json')">Save settings.json</button>
