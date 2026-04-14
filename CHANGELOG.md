@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Hardened boot-time `.claude.json` handling: atomic writes, no clobber on parse failure, idempotent trust-accept.
+- USB source-of-truth safeguard: after first install, stray RAM-side `/root/.claude[.json]` is rescued to `/tmp` instead of merging into USB.
+
 ## 2026.03.06
 
 Initial public release.

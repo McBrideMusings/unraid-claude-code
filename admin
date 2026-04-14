@@ -1,0 +1,981 @@
+#!/usr/bin/env python3
+# @bundled admin_lib=0.1.0 sha=3a3a4068bafd modules=core,remote,unraid
+# Re-bundle: /Users/pierce/Projects/admin-project-tool/bundle /Users/pierce/Projects/unraid-claude-code/admin
+
+# === admin_lib.core ========================================================
+"""Layer 1 — universal admin infrastructure shared by all project types.
+
+Provides: colors, output helpers, logging, run_cmd, command registry,
+TUI menu, pick_target, process management, boot() entry point.
+"""
+
+import atexit
+import os
+import signal
+import subprocess
+import sys
+from collections import OrderedDict
+
+
+# ---------------------------------------------------------------------------
+# Colors & output
+# ---------------------------------------------------------------------------
+
+class C:
+    """ANSI color codes."""
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RESET = "\033[0m"
+
+
+def info(msg):
+    print(f"{C.CYAN}{msg}{C.RESET}")
+
+
+def ok(msg):
+    print(f"{C.GREEN}{msg}{C.RESET}")
+
+
+def warn(msg):
+    print(f"{C.YELLOW}{msg}{C.RESET}", file=sys.stderr)
+
+
+def err(msg):
+    print(f"{C.RED}{msg}{C.RESET}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# URL status helpers
+# ---------------------------------------------------------------------------
+
+_urls = []  # list of (label, url) tuples set by projects
+
+
+def set_urls(urls):
+    """Set project URLs for display in TUI. urls: list of (label, url) tuples."""
+    global _urls
+    _urls = list(urls)
+
+
+def check_url(url, timeout=1):
+    """Return True if url responds with 2xx."""
+    try:
+        from urllib.parse import urlparse
+        import http.client
+        p = urlparse(url)
+        if p.scheme == "https":
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            conn = http.client.HTTPSConnection(p.hostname, p.port or 443, context=ctx, timeout=timeout)
+        else:
+            conn = http.client.HTTPConnection(p.hostname, p.port or 80, timeout=timeout)
+        try:
+            conn.request("GET", p.path or "/")
+            resp = conn.getresponse()
+            return 200 <= resp.status < 400
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
+def format_url_status(label, url, live, label_width=6):
+    """Format a URL line with colored live/down indicator."""
+    dot = f"{C.GREEN}\u25cf{C.RESET}" if live else f"{C.DIM}\u25cb{C.RESET}"
+    status = f"{C.GREEN}LIVE{C.RESET}" if live else f"{C.DIM}DOWN{C.RESET}"
+    return f"  {label:<{label_width}}{C.DIM}{url}{C.RESET}  {dot} {status}"
+
+
+def print_url_status():
+    """Check and print status for all registered URLs. Checks in parallel."""
+    if not _urls:
+        return
+    from concurrent.futures import ThreadPoolExecutor
+    label_width = max(len(label) for label, _ in _urls) + 2
+    health_urls = [(label, url, url.rstrip("/") + "/health") for label, url in _urls]
+    with ThreadPoolExecutor(max_workers=len(health_urls)) as pool:
+        results = list(pool.map(lambda h: check_url(h[2]), health_urls))
+    for (label, url, _), live in zip(health_urls, results):
+        print(format_url_status(label, url, live, label_width))
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Module-level state (set by _init / boot)
+# ---------------------------------------------------------------------------
+
+_project_name = ""
+_project_root = ""
+LOG_DIR = ""
+LOG_FILE = ""
+
+
+def _init(project_name, project_root=None):
+    """Initialize module state. Called by boot()."""
+    global _project_name, _project_root, LOG_DIR, LOG_FILE
+    _project_name = project_name
+    _project_root = project_root or os.getcwd()
+    LOG_DIR = os.path.join(_project_root, "tmp")
+    LOG_FILE = os.path.join(LOG_DIR, "run.log")
+
+
+# ---------------------------------------------------------------------------
+# .env loading
+# ---------------------------------------------------------------------------
+
+def _load_dotenv(root=None):
+    """Load .env file from project root if it exists."""
+    root = root or _project_root or os.getcwd()
+    env_path = os.path.join(root, ".env")
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip())
+
+
+# ---------------------------------------------------------------------------
+# Process management
+# ---------------------------------------------------------------------------
+
+_children = []
+_cleanup_hooks = []
+
+
+def register_cleanup(fn):
+    """Register a cleanup function called on SIGINT/SIGTERM and at exit."""
+    _cleanup_hooks.append(fn)
+
+
+def _cleanup_children(signum=None, frame=None):
+    for fn in _cleanup_hooks:
+        try:
+            fn()
+        except Exception:
+            pass
+    for p in _children:
+        try:
+            p.terminate()
+        except OSError:
+            pass
+    if signum is not None:
+        sys.exit(1)
+
+
+signal.signal(signal.SIGINT, _cleanup_children)
+signal.signal(signal.SIGTERM, _cleanup_children)
+atexit.register(_cleanup_children)
+
+
+# ---------------------------------------------------------------------------
+# run_cmd
+# ---------------------------------------------------------------------------
+
+def run_cmd(cmd, shell=True, capture_log=True, formatter=None):
+    """Run a command with line-buffered output, tee to tmp/run.log if capture_log is True."""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log_fh = None
+    if capture_log:
+        log_fh = open(LOG_FILE, "a")
+
+    proc = subprocess.Popen(
+        cmd, shell=shell, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        bufsize=1, universal_newlines=True,
+    )
+    _children.append(proc)
+    try:
+        for line in proc.stdout:
+            display = formatter(line) if formatter else line
+            sys.stdout.write(display)
+            sys.stdout.flush()
+            if log_fh:
+                log_fh.write(line)
+                log_fh.flush()
+    finally:
+        proc.wait()
+        _children.remove(proc)
+        if log_fh:
+            log_fh.close()
+    return proc.returncode
+
+
+# ---------------------------------------------------------------------------
+# Sync deploy
+# ---------------------------------------------------------------------------
+
+def sync_deploy(src_dir, dest, excludes=None, post_sync=None):
+    """Copy built files to a local or remote destination.
+
+    src_dir: local directory to sync from
+    dest: local path, or user@host:/path for remote rsync
+    excludes: list of rsync --exclude patterns (remote only)
+    post_sync: callable run after successful sync (receives dest as arg)
+    Returns exit code.
+    """
+    is_remote = ":" in dest and "@" in dest.split(":")[0]
+
+    if is_remote:
+        exclude_flags = ""
+        if excludes:
+            exclude_flags = " ".join(f"--exclude '{e}'" for e in excludes)
+        info(f"Syncing to {dest}")
+        rc = run_cmd(f"rsync -avz --delete {exclude_flags} {src_dir}/ {dest}/".strip())
+        if rc != 0:
+            err("rsync failed")
+            return rc
+        ok(f"Remote deploy complete: {dest}")
+    else:
+        import shutil
+        os.makedirs(dest, exist_ok=True)
+        info(f"Copying to {dest}")
+        ignore = shutil.ignore_patterns(*excludes) if excludes else None
+        shutil.copytree(src_dir, dest, dirs_exist_ok=True, ignore=ignore)
+        ok(f"Local deploy complete: {dest}")
+        rc = 0
+
+    if rc == 0 and post_sync:
+        post_sync(dest)
+
+    return rc
+
+
+# ---------------------------------------------------------------------------
+# Command registry
+# ---------------------------------------------------------------------------
+
+# Core command names in canonical TUI order.
+# Projects implement whichever apply — none are mandatory.
+#   build  — Compile/produce artifacts. Don't install, don't run.
+#   dev    — Development build + run with hot reload loop.
+#   deploy — Build for production and install/ship.
+CORE_COMMANDS = ("build", "dev", "deploy")
+
+_core_commands = OrderedDict()    # name → {func, desc}
+_custom_commands = OrderedDict()  # name → {func, desc}
+_subcommand_help = {}
+
+
+def _all_commands():
+    """Return core commands (in order) + custom commands, for iteration."""
+    merged = OrderedDict()
+    for name in CORE_COMMANDS:
+        if name in _core_commands:
+            merged[name] = _core_commands[name]
+    merged.update(_custom_commands)
+    return merged
+
+
+def core(name, description):
+    """Decorator to register a core command (build/dev/deploy).
+
+    Core commands appear first in the TUI in a fixed order, visually
+    separated from project-specific commands.
+    """
+    if name not in CORE_COMMANDS:
+        raise ValueError(
+            f"'{name}' is not a core command. "
+            f"Use @command() for project-specific commands, "
+            f"or choose from: {', '.join(CORE_COMMANDS)}"
+        )
+    def decorator(func):
+        _core_commands[name] = {"func": func, "desc": description}
+        return func
+    return decorator
+
+
+def command(name, description):
+    """Decorator to register a project-specific command.
+
+    These appear after the core commands in the TUI.
+    """
+    def decorator(func):
+        _custom_commands[name] = {"func": func, "desc": description}
+        return func
+    return decorator
+
+
+def subcommand_help(name):
+    """Decorator to register a subcommand help function."""
+    def decorator(func):
+        _subcommand_help[name] = func
+        return func
+    return decorator
+
+
+# ---------------------------------------------------------------------------
+# TUI menu (draw.rendered approach)
+# ---------------------------------------------------------------------------
+
+def read_key():
+    """Read a single keypress, handling arrow key escape sequences."""
+    import select
+    import tty
+    import termios
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = os.read(fd, 1)
+        if ch == b"\x03":
+            raise KeyboardInterrupt
+        if ch == b"\x1b":
+            # Wait briefly for arrow key sequence bytes to arrive.
+            # Arrow keys send \x1b[A / \x1b[B — bare Esc sends just \x1b.
+            if select.select([fd], [], [], 0.1)[0]:
+                seq = os.read(fd, 2)
+                if seq == b"[A":
+                    return "up"
+                if seq == b"[B":
+                    return "down"
+            return "esc"
+        return ch.decode("utf-8", errors="replace")
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def _build_menu_layout():
+    """Build the menu item list with an optional separator between standard and custom.
+
+    Returns (items, separator_index) where items is a list of command names
+    and separator_index is the position of the visual divider (or -1 if none).
+    """
+    std = [n for n in CORE_COMMANDS if n in _core_commands]
+    cust = list(_custom_commands.keys())
+    if std and cust:
+        return std + cust, len(std)
+    return std + cust, -1
+
+
+def _tui_menu():
+    """Inline interactive menu for selecting a command."""
+    if not sys.stdout.isatty():
+        _print_help()
+        return
+
+    import termios
+
+    all_cmds = _all_commands()
+    items, sep_idx = _build_menu_layout()
+    sel = 0
+    num = len(items)
+
+    if num == 0:
+        warn("No commands registered.")
+        return
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+
+    has_sep = sep_idx > 0
+    menu_lines = num + (1 if has_sep else 0) + 2
+
+    print(f"{C.BOLD}{_project_name}{C.RESET}\n")
+    print_url_status()
+
+    for _ in range(menu_lines):
+        sys.stdout.write("\n")
+    sys.stdout.write(f"\033[{menu_lines}A")
+    sys.stdout.flush()
+
+    def draw():
+        sys.stdout.write("\033[s")
+        for i, name in enumerate(items):
+            if has_sep and i == sep_idx:
+                sys.stdout.write("\033[2K\n")
+            desc = all_cmds[name]["desc"]
+            sys.stdout.write("\033[2K")
+            if i == sel:
+                sys.stdout.write(f"  {C.CYAN}{C.BOLD}> {name:<14}{C.RESET} {desc}\n")
+            else:
+                sys.stdout.write(f"    {C.DIM}{name:<14}{C.RESET} {desc}\n")
+        sys.stdout.write(f"\033[2K\n\033[2K{C.DIM}  [arrows/j/k] navigate  [enter] run  [q/esc] quit{C.RESET}\n")
+        sys.stdout.write("\033[u")
+        sys.stdout.flush()
+
+    try:
+        while True:
+            draw()
+            key = read_key()
+            if key in ("q", "Q", "esc"):
+                sys.stdout.write(f"\033[{menu_lines}B")
+                sys.stdout.flush()
+                print()
+                return
+            elif key in ("up", "k"):
+                sel = (sel - 1) % num
+            elif key in ("down", "j"):
+                sel = (sel + 1) % num
+            elif key in ("\r", "\n"):
+                sys.stdout.write("\033[J")
+                sys.stdout.flush()
+                info(f"./admin {items[sel]}")
+                print()
+                os.makedirs(LOG_DIR, exist_ok=True)
+                open(LOG_FILE, "w").close()
+                all_cmds[items[sel]]["func"]([])
+                return
+    except (KeyboardInterrupt, EOFError):
+        sys.stdout.write(f"\033[{menu_lines}B")
+        sys.stdout.flush()
+        print()
+        return
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+# ---------------------------------------------------------------------------
+# pick_target — sub-TUI for selecting among options
+# ---------------------------------------------------------------------------
+
+def pick_target(targets, prompt="Select target"):
+    """Show an inline TUI picker for sub-targets. Returns the chosen key or None.
+
+    targets: OrderedDict of {name: description}
+    """
+    if not sys.stdout.isatty():
+        return None
+
+    import tty
+    import termios
+
+    items = list(targets.keys())
+    sel = 0
+    num = len(items)
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+
+    menu_lines = num + 1
+
+    sys.stdout.write(f"{C.BOLD}{prompt}{C.RESET}\n")
+    for _ in range(menu_lines):
+        sys.stdout.write("\n")
+    sys.stdout.flush()
+    sys.stdout.write(f"\033[{menu_lines}A")
+    sys.stdout.flush()
+
+    def draw():
+        sys.stdout.write("\033[s")
+        for i, name in enumerate(items):
+            desc = targets[name]
+            sys.stdout.write("\033[2K")
+            if i == sel:
+                sys.stdout.write(f"  {C.CYAN}{C.BOLD}> {name:<14}{C.RESET} {desc}")
+            else:
+                sys.stdout.write(f"    {C.DIM}{name:<14}{C.RESET} {desc}")
+            sys.stdout.write("\n")
+        sys.stdout.write("\033[2K")
+        sys.stdout.write(f"{C.DIM}  [arrows/j/k] navigate  [enter] select  [q/esc] cancel{C.RESET}")
+        sys.stdout.write("\033[u")
+        sys.stdout.flush()
+
+    try:
+        while True:
+            draw()
+            key = read_key()
+            if key in ("q", "Q", "esc"):
+                sys.stdout.write(f"\033[{menu_lines}B\n")
+                sys.stdout.flush()
+                return None
+            elif key in ("up", "k"):
+                sel = (sel - 1) % num
+            elif key in ("down", "j"):
+                sel = (sel + 1) % num
+            elif key in ("\r", "\n"):
+                for _ in range(menu_lines):
+                    sys.stdout.write("\033[2K\n")
+                sys.stdout.write(f"\033[{menu_lines}A")
+                sys.stdout.flush()
+                return items[sel]
+    except (KeyboardInterrupt, EOFError):
+        sys.stdout.write(f"\033[{menu_lines}B\n")
+        sys.stdout.flush()
+        return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def dispatch_target(targets, cmd_name, args, handlers):
+    """Route a command to the correct target handler.
+
+    targets:  OrderedDict of {name: description} for pick_target menu
+    cmd_name: command name for error messages (e.g. "build")
+    args:     argv args passed to the command
+    handlers: dict of {target_name: callable(rest_args)}
+
+    Single-target shortcut: if len(targets) == 1, skips the menu.
+    """
+    target = args[0] if args and not args[0].startswith("-") else ""
+    rest = args[1:] if target else (args or [])
+
+    if not target:
+        if len(targets) == 1:
+            target = next(iter(targets))
+        else:
+            target = pick_target(targets, f"{cmd_name.title()} which target?")
+            if not target:
+                return 0
+
+    if target not in handlers:
+        err(f"Unknown {cmd_name} target: {target}")
+        return 1
+
+    return handlers[target](rest)
+
+
+# ---------------------------------------------------------------------------
+# Help
+# ---------------------------------------------------------------------------
+
+def _print_help():
+    """Print help text (non-TTY fallback and --help)."""
+    all_cmds = _all_commands()
+    _, sep_idx = _build_menu_layout()
+    items = list(all_cmds.keys())
+
+    print(f"{C.BOLD}{_project_name}{C.RESET}")
+    print_url_status()
+    print(f"Usage: ./admin <command> [args...]\n")
+    print("Commands:")
+    for i, name in enumerate(items):
+        if sep_idx > 0 and i == sep_idx:
+            print()
+        print(f"  {C.CYAN}{name:<16}{C.RESET} {all_cmds[name]['desc']}")
+    print(f"\nRun {C.DIM}./admin{C.RESET} with no args for interactive menu.")
+
+
+# ---------------------------------------------------------------------------
+# boot() — single entry point
+# ---------------------------------------------------------------------------
+
+def boot(project_name, load_dotenv=False):
+    """Entry point for per-project admin files.
+
+    Call this from __main__. Handles chdir, argv parsing, TUI or dispatch.
+    """
+    # Determine project root from the caller's __file__ (the admin script)
+    import inspect
+    caller_frame = inspect.stack()[1]
+    admin_file = caller_frame.filename
+    project_root = os.path.dirname(os.path.abspath(admin_file))
+
+    os.chdir(project_root)
+    _init(project_name, project_root)
+
+    if load_dotenv:
+        _load_dotenv(project_root)
+
+    if len(sys.argv) < 2:
+        _tui_menu()
+        return
+
+    cmd_name = sys.argv[1]
+    if cmd_name in ("-h", "--help", "help"):
+        _print_help()
+        return
+
+    all_cmds = _all_commands()
+    if cmd_name not in all_cmds:
+        err(f"Unknown command: {cmd_name}")
+        _print_help()
+        sys.exit(1)
+
+    args = sys.argv[2:]
+
+    # Check for subcommand help
+    if ("-h" in args or "--help" in args) and cmd_name in _subcommand_help:
+        _subcommand_help[cmd_name]()
+        return
+
+    # Clear log file for fresh run
+    os.makedirs(LOG_DIR, exist_ok=True)
+    open(LOG_FILE, "w").close()
+
+    all_cmds[cmd_name]["func"](args)
+
+# === admin_lib.remote ======================================================
+"""Layer 4 — SSH, rsync, and systemd helpers for remote host management.
+
+Provides: ssh_cmd, require_host, scp_to, systemd unit management.
+"""
+
+import os
+import subprocess
+import sys
+
+
+def require_host(env_var, label=None):
+    """Read a host from an environment variable, or exit with a helpful message.
+
+    Returns the host string (e.g. 'root@myserver').
+    """
+    host = os.environ.get(env_var, "")
+    if not host:
+        name = label or env_var
+        err(f"{env_var} not set")
+        print(f"\n  Set {env_var} to your {name} host, e.g.:")
+        print(f"    {env_var}=root@myserver ./admin <command>\n")
+        sys.exit(1)
+    return host
+
+
+def ssh_cmd(host, cmd, check=True):
+    """Run a command on a remote host via SSH. Returns exit code."""
+    rc = subprocess.call(["ssh", host, cmd])
+    if check and rc != 0:
+        err(f"SSH command failed (exit {rc})")
+    return rc
+
+
+def scp_to(src, host, dest):
+    """Copy a local file to a remote host via scp. Returns exit code."""
+    info(f"Copying {os.path.basename(src)} to {host}:{dest}...")
+    rc = subprocess.call(["scp", src, f"{host}:{dest}"])
+    if rc == 0:
+        ok(f"Copied to {host}:{dest}")
+    else:
+        err("scp failed")
+    return rc
+
+
+def make_systemd_unit(description, exec_start, after="network.target",
+                      restart="on-failure", env=None):
+    """Generate a systemd unit file string.
+
+    env: dict of environment variables to set, or None.
+    """
+    lines = [
+        "[Unit]",
+        f"Description={description}",
+        f"After={after}",
+        "",
+        "[Service]",
+        f"ExecStart={exec_start}",
+        f"Restart={restart}",
+    ]
+    if env:
+        for k, v in env.items():
+            lines.append(f"Environment={k}={v}")
+    lines.extend([
+        "",
+        "[Install]",
+        "WantedBy=default.target",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def systemd_user_install(host, name, unit_content):
+    """Install and start a systemd user service on a remote host. Returns exit code."""
+    import tempfile
+
+    info(f"Installing systemd user service: {name}...")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".service", delete=False) as f:
+        f.write(unit_content)
+        tmp_path = f.name
+
+    try:
+        rc = scp_to(tmp_path, host, f".config/systemd/user/{name}.service")
+        if rc != 0:
+            return rc
+    finally:
+        os.unlink(tmp_path)
+
+    rc = ssh_cmd(host,
+        f"mkdir -p ~/.config/systemd/user"
+        f" && systemctl --user daemon-reload"
+        f" && systemctl --user enable --now {name}",
+    )
+    if rc == 0:
+        ok(f"Service {name} installed and started")
+    return rc
+
+
+def systemd_user_status(host, name):
+    """Show status of a systemd user service on a remote host."""
+    info(f"Status of {name} on {host}:")
+    ssh_cmd(host, f"systemctl --user status {name}", check=False)
+
+# === admin_lib.unraid ======================================================
+"""Layer 4 — Unraid plugin deployment helpers.
+
+Provides: plugin_deploy, plugin_remove for Unraid .plg plugin development.
+"""
+
+import os
+import subprocess
+import time
+
+
+def plugin_deploy(host, plg_path, plg_template, local_src, remote_dest,
+                  chmod_dirs=None):
+    """Deploy an Unraid plugin: register .plg if needed, then rsync source files.
+
+    host: SSH host (e.g. 'root@unraid')
+    plg_path: remote path for .plg file (e.g. /boot/config/plugins/myplugin.plg)
+    plg_template: .plg XML template string (TIMESTAMP placeholder gets replaced)
+    local_src: local glob pattern for source files
+    remote_dest: remote directory to rsync into
+    chmod_dirs: list of remote dirs to chmod +x after sync
+    Returns exit code.
+    """
+    rc = ssh_cmd(host, f"test -f {plg_path}", check=False)
+    if rc != 0:
+        info("Plugin not registered — installing .plg...")
+        rendered = plg_template.replace("TIMESTAMP", str(int(time.time())))
+        install_cmd = (
+            f"cat > {plg_path} << 'PLGEOF'\n{rendered}\nPLGEOF"
+        )
+        rc = ssh_cmd(host, install_cmd, check=False)
+        if rc != 0:
+            err("Failed to write .plg file")
+            return rc
+        info("Running plugin install script...")
+        rc = ssh_cmd(host, f"/usr/local/sbin/plugin install {plg_path}", check=False)
+        if rc != 0:
+            err("Plugin install failed")
+            return rc
+        ok("Plugin registered")
+
+    info("Syncing source files...")
+    rc = run_cmd(f"rsync -avz --delete {local_src} {host}:{remote_dest}")
+    if rc != 0:
+        err("rsync failed")
+        return rc
+
+    if chmod_dirs:
+        for d in chmod_dirs:
+            ssh_cmd(host, f"chmod +x {d}/* 2>/dev/null || true", check=False)
+
+    ok("Deploy complete")
+    return 0
+
+
+def plugin_remove(host, plugin_name, plugin_dir):
+    """Fully remove an Unraid plugin: uninstall, remove .plg, clean up.
+
+    host: SSH host
+    plugin_name: plugin name (used for .plg path and emhttp dir)
+    plugin_dir: USB-persistent plugin directory to remove
+    """
+    plg = f"/boot/config/plugins/{plugin_name}.plg"
+
+    info(f"Removing plugin {plugin_name}...")
+    ssh_cmd(host, f"/usr/local/sbin/plugin remove {plg} 2>/dev/null || true",
+            check=False)
+    ssh_cmd(host,
+        f"rm -f {plg}"
+        f" && rm -rf /usr/local/emhttp/plugins/{plugin_name}"
+        f" && rm -rf {plugin_dir}",
+        check=False,
+    )
+    ok(f"Plugin {plugin_name} fully removed")
+
+# === project ============================================================
+"""admin -- Claude Code Unraid Plugin task runner."""
+
+import os
+import subprocess
+import sys
+
+
+PLUGIN_NAME = "claude-code"
+PLUGIN_DIR = f"/boot/config/plugins/{PLUGIN_NAME}"
+EMHTTP_DIR = f"/usr/local/emhttp/plugins/{PLUGIN_NAME}"
+PLG_PATH = f"/boot/config/plugins/{PLUGIN_NAME}.plg"
+CONFIG_DIR = f"{PLUGIN_DIR}/claude-config"
+
+DEV_PLG_TEMPLATE = r"""<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN [
+  <!ENTITY name    "claude-code">
+  <!ENTITY author  "McBrideMusings">
+  <!ENTITY version "dev.TIMESTAMP">
+  <!ENTITY launch  "Utilities/ClaudeCode">
+]>
+<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" min="6.12.0">
+<CHANGES>
+##&name; — dev build
+</CHANGES>
+
+<FILE Run="/bin/bash">
+<INLINE>
+PLUGIN="claude-code"
+PLUGIN_DIR="/boot/config/plugins/${PLUGIN}"
+CONFIG_DIR="${PLUGIN_DIR}/claude-config"
+BOOTSTRAP_MARKER="${CONFIG_DIR}/.bootstrapped"
+RESCUE_DIR="/tmp/claude-ram-rescue-$(date +%s)"
+
+mkdir -p "${PLUGIN_DIR}/bin"
+mkdir -p "${CONFIG_DIR}"
+mkdir -p "${CONFIG_DIR}/skills"
+mkdir -p "${CONFIG_DIR}/commands"
+
+if [ ! -f "${PLUGIN_DIR}/${PLUGIN}.cfg" ]; then
+  cp /usr/local/emhttp/plugins/${PLUGIN}/default.cfg "${PLUGIN_DIR}/${PLUGIN}.cfg" 2>/dev/null || true
+fi
+
+if [ ! -f "${CONFIG_DIR}/CLAUDE.md" ]; then
+  cp /usr/local/emhttp/plugins/${PLUGIN}/default-claude.md "${CONFIG_DIR}/CLAUDE.md" 2>/dev/null || true
+fi
+
+chmod +x /usr/local/emhttp/plugins/${PLUGIN}/scripts/* 2>/dev/null || true
+
+BIN_CACHE="${PLUGIN_DIR}/bin/claude"
+if [ -f "${BIN_CACHE}" ]; then
+  VERSION=$("${BIN_CACHE}" --version 2>/dev/null | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' || echo "latest")
+  mkdir -p /root/.local/share/claude/versions
+  mkdir -p /root/.local/bin
+  cp "${BIN_CACHE}" "/root/.local/share/claude/versions/${VERSION}"
+  chmod 755 "/root/.local/share/claude/versions/${VERSION}"
+  ln -sf "/root/.local/share/claude/versions/${VERSION}" /root/.local/bin/claude
+  cp "${BIN_CACHE}" /usr/local/bin/claude
+  chmod 755 /usr/local/bin/claude
+fi
+
+if ! grep -q '\.local/bin' /root/.bash_profile 2>/dev/null; then
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> /root/.bash_profile
+fi
+
+# Symlink /root/.claude.json to USB-persistent copy.
+# After first install (marker present), USB is source of truth and any RAM-side real file
+# is rescued to /tmp rather than merged into USB.
+if [ -f "${BOOTSTRAP_MARKER}" ]; then
+  if [ -L "/root/.claude.json" ]; then
+    [ "$(readlink /root/.claude.json)" != "${CONFIG_DIR}/.claude.json" ] && rm -f /root/.claude.json
+  elif [ -e "/root/.claude.json" ]; then
+    mkdir -p "${RESCUE_DIR}"
+    mv /root/.claude.json "${RESCUE_DIR}/.claude.json" 2>/dev/null || rm -f /root/.claude.json
+    echo "USB source-of-truth: moved /root/.claude.json to ${RESCUE_DIR}/"
+  fi
+else
+  if [ -L "/root/.claude.json" ]; then
+    [ "$(readlink /root/.claude.json)" != "${CONFIG_DIR}/.claude.json" ] && rm -f /root/.claude.json
+  elif [ -f "/root/.claude.json" ]; then
+    cp /root/.claude.json "${CONFIG_DIR}/.claude.json" 2>/dev/null || true
+    rm -f /root/.claude.json
+  fi
+fi
+[ -f "${CONFIG_DIR}/.claude.json" ] || touch "${CONFIG_DIR}/.claude.json"
+[ -L "/root/.claude.json" ] || ln -sf "${CONFIG_DIR}/.claude.json" /root/.claude.json
+
+# Pre-accept workspace trust for /root.
+# Safety: on any failure we exit 0 without writing, so a bad parse never clobbers the user's config.
+if [ -f "${CONFIG_DIR}/.claude.json" ] && command -v python3 &>/dev/null; then
+  python3 -c "
+import json, os, sys
+p = '${CONFIG_DIR}/.claude.json'
+try:
+    if not os.path.exists(p) or os.path.getsize(p) == 0:
+        d = {}
+    else:
+        with open(p) as f:
+            d = json.load(f)
+    if not isinstance(d, dict):
+        sys.exit(0)
+    if d.get('projects', {}).get('/root', {}).get('hasTrustDialogAccepted') is True:
+        sys.exit(0)
+    d.setdefault('projects', {}).setdefault('/root', {})['hasTrustDialogAccepted'] = True
+    tmp = p + '.tmp'
+    try:
+        with open(tmp, 'w') as f:
+            json.dump(d, f, indent=2)
+        os.replace(tmp, p)
+    finally:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except Exception: pass
+except Exception:
+    sys.exit(0)
+" 2>/dev/null || true
+fi
+
+# Symlink /root/.claude/ to USB-persistent config directory.
+# After first install (marker present), USB is source of truth and any RAM-side real dir
+# is rescued to /tmp rather than merged into USB.
+if [ -f "${BOOTSTRAP_MARKER}" ]; then
+  if [ -L "/root/.claude" ]; then
+    [ "$(readlink /root/.claude)" != "${CONFIG_DIR}" ] && rm -f /root/.claude
+  elif [ -e "/root/.claude" ]; then
+    mkdir -p "${RESCUE_DIR}"
+    mv /root/.claude "${RESCUE_DIR}/.claude" 2>/dev/null || rm -rf /root/.claude
+    echo "USB source-of-truth: moved /root/.claude to ${RESCUE_DIR}/"
+  fi
+else
+  if [ -L "/root/.claude" ]; then
+    [ "$(readlink -f /root/.claude)" != "${CONFIG_DIR}" ] && rm -f /root/.claude
+  elif [ -d "/root/.claude" ]; then
+    cp -a /root/.claude/. "${CONFIG_DIR}/" 2>/dev/null || true
+    rm -rf /root/.claude
+  fi
+fi
+[ -L "/root/.claude" ] || ln -s "${CONFIG_DIR}" /root/.claude
+
+# Mark first-install complete so future boots take the USB-wins path.
+touch "${BOOTSTRAP_MARKER}" 2>/dev/null || true
+
+echo "Claude Code dev plugin registered."
+</INLINE>
+</FILE>
+
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+rm -f /usr/local/bin/claude
+[ -L "/root/.claude" ] &amp;&amp; rm -f /root/.claude
+rm -rf /usr/local/emhttp/plugins/claude-code
+echo "Claude Code plugin removed."
+</INLINE>
+</FILE>
+</PLUGIN>
+"""
+
+
+@command("deploy", "Push source files to Unraid (registers if needed)")
+def cmd_deploy(args):
+    host = f"root@{require_host('UNRAID_HOST')}"
+    local_src = f"source/usr/local/emhttp/plugins/{PLUGIN_NAME}/*"
+
+    ssh_cmd(host, f"mkdir -p {EMHTTP_DIR}/include {EMHTTP_DIR}/scripts")
+    rc = plugin_deploy(
+        host, PLG_PATH, DEV_PLG_TEMPLATE,
+        local_src, f"{EMHTTP_DIR}/",
+        chmod_dirs=[f"{EMHTTP_DIR}/scripts"],
+    )
+    return rc
+
+
+@command("clean", "Reset to fresh-install state (keeps plugin registered)")
+def cmd_clean(args):
+    host = f"root@{require_host('UNRAID_HOST')}"
+    info(f"Resetting to fresh-install state on {host}...")
+    ssh_cmd(host, f"""
+        rm -f /usr/local/bin/claude
+        rm -rf /root/.local/bin/claude /root/.local/share/claude
+        rm -rf {CONFIG_DIR}/*
+        cp {EMHTTP_DIR}/default-claude.md {CONFIG_DIR}/CLAUDE.md 2>/dev/null || true
+        cp {EMHTTP_DIR}/default.cfg {PLUGIN_DIR}/{PLUGIN_NAME}.cfg 2>/dev/null || true
+        echo 'Config reset. Binary removed. Plugin still registered.'
+    """)
+    ok("Done.")
+
+
+@command("uninstall", "Full removal (plugin + all data from USB)")
+def cmd_uninstall(args):
+    host = f"root@{require_host('UNRAID_HOST')}"
+    info(f"Fully uninstalling from {host}...")
+    plugin_remove(host, PLUGIN_NAME, PLUGIN_DIR)
+    ok("Done.")
+
+
+boot("Claude Code Unraid Plugin", load_dotenv=True)

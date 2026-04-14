@@ -3,3 +3,4 @@ packages/
 .claude/
 .env
 CLAUDE.local.md
+tmp/

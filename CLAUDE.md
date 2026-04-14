@@ -10,7 +10,7 @@ This is an Unraid plugin that installs Claude Code CLI with persistence across r
 - `source/` — Files that get packaged into the plugin `.txz`. Mirrors the filesystem layout on the Unraid server.
 - `Makefile` — Builds the `.txz` package locally (requires Slackware `makepkg`).
 - `.github/workflows/release.yml` — CI/CD: tag push triggers build, release, and checksum patching.
-- `admin.sh` — Dev admin script (deploy to local Unraid for testing). Requires `UNRAID_HOST` in `.env`.
+- `admin` — Dev task runner (deploy to local Unraid for testing). Requires `UNRAID_HOST` in `.env`.
 
 ## Key Files
 
@@ -36,14 +36,15 @@ This is an Unraid plugin that installs Claude Code CLI with persistence across r
 - `/root/.claude.json` → symlink to USB-persistent copy (workspace trust, onboarding state, cached features)
 - Binary cached at `/boot/config/plugins/claude-code/bin/claude`, copied to RAM at `/usr/local/bin/claude` and native structure at `~/.local/share/claude/versions/<ver>`
 - PATH export added to `/root/.bash_profile` (login shells) and `/etc/profile.d/claude-code.sh` (all shells, RAM-based, recreated on boot)
+- **USB is source of truth after first install.** A `.bootstrapped` marker in `claude-config/` gates one-time RAM→USB migration. On every boot after, any stray real file/dir at `/root/.claude[.json]` is moved to `/tmp/claude-ram-rescue-<ts>/` rather than merged into USB.
 
 ## Dev Deploy
 
 ```bash
 # Set UNRAID_HOST in .env file
-./admin.sh deploy      # Push source files (auto-registers plugin if needed)
-./admin.sh clean       # Reset to fresh-install state (keeps plugin registered)
-./admin.sh uninstall   # Full removal
+./admin deploy      # Push source files (auto-registers plugin if needed)
+./admin clean       # Reset to fresh-install state (keeps plugin registered)
+./admin uninstall   # Full removal
 ```
 
 ## Unraid Plugin Basics
