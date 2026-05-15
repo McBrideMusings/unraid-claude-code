@@ -97,7 +97,9 @@ if [ ! -f "${BIN_CACHE}" ]; then
   rm -rf "${TMPHOME}"
 fi
 
-# Restore native install structure from USB cache
+# Restore native install structure from USB cache. The wrapper at
+# /usr/local/bin/claude (installed by the .txz) finds and execs the versioned
+# binary; do NOT overwrite the wrapper here.
 if [ -f "${BIN_CACHE}" ]; then
   VERSION=$("${BIN_CACHE}" --version 2>/dev/null | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' || echo "latest")
   mkdir -p /root/.local/share/claude/versions
@@ -105,14 +107,15 @@ if [ -f "${BIN_CACHE}" ]; then
   cp "${BIN_CACHE}" "/root/.local/share/claude/versions/${VERSION}"
   chmod 755 "/root/.local/share/claude/versions/${VERSION}"
   ln -sf "/root/.local/share/claude/versions/${VERSION}" /root/.local/bin/claude
-  cp "${BIN_CACHE}" "${BIN_PATH}"
-  chmod 755 "${BIN_PATH}"
   echo "Claude Code ${VERSION} installed"
 fi
+chmod 755 "${BIN_PATH}" 2>/dev/null || true
 
-if ! grep -q '\.local/bin' /root/.bash_profile 2>/dev/null; then
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> /root/.bash_profile
+if ! grep -q 'CLAUDE_CODE_PATH' /root/.bash_profile 2>/dev/null; then
+  echo 'export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"  # CLAUDE_CODE_PATH' &gt;&gt; /root/.bash_profile
 fi
+mkdir -p /etc/profile.d
+echo 'export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"  # CLAUDE_CODE_PATH' &gt; /etc/profile.d/claude-code.sh
 
 # Symlink /root/.claude.json to USB-persistent copy.
 # After first install (marker present), USB is source of truth and any RAM-side real file

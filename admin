@@ -832,6 +832,15 @@ fi
 
 chmod +x /usr/local/emhttp/plugins/${PLUGIN}/scripts/* 2>/dev/null || true
 
+# Restore the claude wrapper to RAM from its USB-cached copy. The wrapper
+# repairs /root/.claude.json on every `claude` invocation (defends against
+# Claude Code's symlink-breaking corruption rotation). This is the dev-mode
+# equivalent of the .txz extracting source/usr/local/bin/claude into place.
+if [ -f "${PLUGIN_DIR}/bin/claude-wrapper" ]; then
+  cp "${PLUGIN_DIR}/bin/claude-wrapper" /usr/local/bin/claude
+  chmod 755 /usr/local/bin/claude
+fi
+
 BIN_CACHE="${PLUGIN_DIR}/bin/claude"
 if [ -f "${BIN_CACHE}" ]; then
   VERSION=$("${BIN_CACHE}" --version 2>/dev/null | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' || echo "latest")
@@ -840,13 +849,14 @@ if [ -f "${BIN_CACHE}" ]; then
   cp "${BIN_CACHE}" "/root/.local/share/claude/versions/${VERSION}"
   chmod 755 "/root/.local/share/claude/versions/${VERSION}"
   ln -sf "/root/.local/share/claude/versions/${VERSION}" /root/.local/bin/claude
-  cp "${BIN_CACHE}" /usr/local/bin/claude
-  chmod 755 /usr/local/bin/claude
 fi
+chmod 755 /usr/local/bin/claude 2>/dev/null || true
 
-if ! grep -q '\.local/bin' /root/.bash_profile 2>/dev/null; then
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> /root/.bash_profile
+if ! grep -q 'CLAUDE_CODE_PATH' /root/.bash_profile 2>/dev/null; then
+  echo 'export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"  # CLAUDE_CODE_PATH' >> /root/.bash_profile
 fi
+mkdir -p /etc/profile.d
+echo 'export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"  # CLAUDE_CODE_PATH' > /etc/profile.d/claude-code.sh
 
 # Symlink /root/.claude.json to USB-persistent copy.
 # After first install (marker present), USB is source of truth and any RAM-side real file
@@ -941,18 +951,63 @@ echo "Claude Code plugin removed."
 """
 
 
-@command("deploy", "Push source files to Unraid (registers if needed)")
+@command("deploy", "Push source files to Unraid (always overwrites the .plg)")
 def cmd_deploy(args):
     host = f"root@{require_host('UNRAID_HOST')}"
     local_src = f"source/usr/local/emhttp/plugins/{PLUGIN_NAME}/*"
 
-    ssh_cmd(host, f"mkdir -p {EMHTTP_DIR}/include {EMHTTP_DIR}/scripts")
-    rc = plugin_deploy(
-        host, PLG_PATH, DEV_PLG_TEMPLATE,
-        local_src, f"{EMHTTP_DIR}/",
-        chmod_dirs=[f"{EMHTTP_DIR}/scripts"],
+    ssh_cmd(host, f"mkdir -p {EMHTTP_DIR}/include {EMHTTP_DIR}/scripts {PLUGIN_DIR}/bin")
+
+    # Always rewrite the dev .plg. A user who first installed via Unraid WebUI
+    # will have the released .plg on USB; without overwriting it, the dev
+    # bootstrap never runs on reboot and any boot-time fixes here are dead code.
+    info("Writing dev .plg to USB (overwriting any released version)...")
+    rendered = DEV_PLG_TEMPLATE.replace("TIMESTAMP", str(int(time.time())))
+    rc = ssh_cmd(
+        host,
+        f"cat > {PLG_PATH} << 'PLGEOF'\n{rendered}\nPLGEOF",
+        check=False,
     )
-    return rc
+    if rc != 0:
+        err("Failed to write .plg file")
+        return rc
+
+    # Push the claude wrapper to USB cache so the dev INLINE can restore it
+    # into /usr/local/bin/claude on every boot. (RAM is wiped on reboot; USB
+    # is the only thing that survives.)
+    info("Pushing claude wrapper to USB cache...")
+    # USB is vfat — drop -a (no owner/group preservation) and use -rt to keep
+    # times only. Permissions on vfat are mount-controlled, so we chmod via
+    # the INLINE script on each boot instead.
+    rc = run_cmd(
+        f"rsync -rtvz source/usr/local/bin/claude "
+        f"{host}:{PLUGIN_DIR}/bin/claude-wrapper"
+    )
+    if rc != 0:
+        err("Failed to push wrapper")
+        return rc
+
+    info("Syncing emhttp source files (RAM-only, lost on reboot)...")
+    rc = run_cmd(f"rsync -avz --delete {local_src} {host}:{EMHTTP_DIR}/")
+    if rc != 0:
+        err("rsync failed")
+        return rc
+    ssh_cmd(host, f"chmod +x {EMHTTP_DIR}/scripts/* 2>/dev/null || true", check=False)
+
+    # Install the wrapper to live RAM right now so the current session
+    # benefits — boot-time .plg INLINE handles future boots.
+    ssh_cmd(host,
+        f"cp {PLUGIN_DIR}/bin/claude-wrapper /usr/local/bin/claude "
+        f"&& chmod 755 /usr/local/bin/claude",
+        check=False,
+    )
+
+    # Drop the bootstrap marker so the "USB wins, rescue stray RAM files" path
+    # is active. Without this, a stale real /root/.claude.json could clobber USB.
+    ssh_cmd(host, f"touch {CONFIG_DIR}/.bootstrapped", check=False)
+
+    ok("Deploy complete")
+    return 0
 
 
 @command("clean", "Reset to fresh-install state (keeps plugin registered)")

@@ -1,0 +1,64 @@
+#!/bin/bash
+#
+# Wrapper for `claude` that repairs /root/.claude.json before launching the
+# real binary.
+#
+# Claude Code has a built-in corruption-rotation: when it can't parse
+# .claude.json it `mv`s the file into ~/.claude/backups/ and writes a fresh
+# real file in its place. On Unraid this is destructive: our persistence
+# design symlinks /root/.claude.json to USB, and `mv` of a symlink moves
+# the symlink — leaving /root/.claude.json as a real file in RAM (lost on
+# reboot) while the original USB-resident config sits orphaned. Subsequent
+# writes never reach USB.
+#
+# This wrapper restores the invariant on every launch.
+
+CONFIG_DIR="/boot/config/plugins/claude-code/claude-config"
+USB_TARGET="${CONFIG_DIR}/.claude.json"
+LINK="/root/.claude.json"
+
+repair_link() {
+  if [ -L "$LINK" ] && [ "$(readlink "$LINK" 2>/dev/null)" = "$USB_TARGET" ]; then
+    return 0
+  fi
+  if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then
+    local rescue="/tmp/claude-rescue-$(date +%s)-$$"
+    mkdir -p "$rescue" 2>/dev/null
+    mv "$LINK" "$rescue/.claude.json" 2>/dev/null || rm -rf "$LINK"
+    echo "[claude] rescued real /root/.claude.json -> $rescue/.claude.json" >&2
+  else
+    rm -f "$LINK" 2>/dev/null
+  fi
+  [ -d "$CONFIG_DIR" ] || mkdir -p "$CONFIG_DIR" 2>/dev/null
+  [ -f "$USB_TARGET" ] || touch "$USB_TARGET" 2>/dev/null
+  ln -s "$USB_TARGET" "$LINK" 2>/dev/null
+}
+
+repair_link
+
+find_binary() {
+  local vdir=/root/.local/share/claude/versions
+  if [ -d "$vdir" ]; then
+    local v
+    for v in $(ls -t "$vdir" 2>/dev/null); do
+      if [ -x "$vdir/$v" ] && [ ! -d "$vdir/$v" ]; then
+        echo "$vdir/$v"
+        return 0
+      fi
+    done
+  fi
+  if [ -x /root/.local/bin/claude ] && [ "$(readlink -f /root/.local/bin/claude 2>/dev/null)" != "$(readlink -f "$0" 2>/dev/null)" ]; then
+    readlink -f /root/.local/bin/claude
+    return 0
+  fi
+  return 1
+}
+
+BIN=$(find_binary)
+if [ -z "$BIN" ]; then
+  echo "[claude] no runnable binary found under /root/.local/share/claude/versions/" >&2
+  echo "[claude] run: /usr/local/emhttp/plugins/claude-code/scripts/update-claude" >&2
+  exit 127
+fi
+
+exec "$BIN" "$@"

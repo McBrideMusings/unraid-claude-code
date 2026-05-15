@@ -69,9 +69,9 @@ ln -sf "/root/.local/share/claude/versions/${VERSION}" /root/.local/bin/claude
 
 rm -rf "${TMPHOME}"
 
-# Also keep a copy at /usr/local/bin for PATH convenience
-cp "${BIN_CACHE}" /usr/local/bin/claude
-chmod 755 /usr/local/bin/claude
+# /usr/local/bin/claude is the wrapper installed by the plugin .txz — do NOT
+# overwrite it with the raw binary or runtime symlink repair stops working.
+chmod 755 /usr/local/bin/claude 2>/dev/null || true
 
 # Run claude install to register shell integration properly
 echo ""
