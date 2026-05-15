@@ -34,8 +34,9 @@ This is an Unraid plugin that installs Claude Code CLI with persistence across r
 
 - `/root/.claude/` → symlink to `/boot/config/plugins/claude-code/claude-config/` (auth tokens, settings, memory, skills, commands)
 - `/root/.claude.json` → symlink to USB-persistent copy (workspace trust, onboarding state, cached features)
-- Binary cached at `/boot/config/plugins/claude-code/bin/claude`, copied to RAM at `/usr/local/bin/claude` and native structure at `~/.local/share/claude/versions/<ver>`
-- PATH export added to `/root/.bash_profile` (login shells) and `/etc/profile.d/claude-code.sh` (all shells, RAM-based, recreated on boot)
+- Binary cached at `/boot/config/plugins/claude-code/bin/claude`, restored to `~/.local/share/claude/versions/<ver>` on boot; `/root/.local/bin/claude` symlinks to it (Claude's native layout).
+- `/usr/local/bin/claude` is a wrapper script (from `source/usr/local/bin/claude`) that repairs the `/root/.claude.json` symlink on every invocation before exec'ing the versioned binary. Defends against Claude Code's built-in corruption-rotation, which `mv`s `.claude.json` into `~/.claude/backups/` and would otherwise sever the symlink to USB.
+- PATH export puts `/usr/local/bin` ahead of `~/.local/bin` so the wrapper wins over Claude's auto-update symlink. Added to `/root/.bash_profile` and `/etc/profile.d/claude-code.sh` (RAM-based, recreated on boot).
 - **USB is source of truth after first install.** A `.bootstrapped` marker in `claude-config/` gates one-time RAM→USB migration. On every boot after, any stray real file/dir at `/root/.claude[.json]` is moved to `/tmp/claude-ram-rescue-<ts>/` rather than merged into USB.
 
 ## Dev Deploy

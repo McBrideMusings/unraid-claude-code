@@ -18,39 +18,51 @@ USB_TARGET="${CONFIG_DIR}/.claude.json"
 LINK="/root/.claude.json"
 
 repair_link() {
+  # Already correct — nothing to do.
   if [ -L "$LINK" ] && [ "$(readlink "$LINK" 2>/dev/null)" = "$USB_TARGET" ]; then
     return 0
   fi
+  # USB-side parent missing (USB unmounted, plugin not installed) — leave the
+  # link alone rather than create a dangling one. Let claude surface the real
+  # error itself.
+  [ -d "$CONFIG_DIR" ] || return 0
+
   if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then
+    # Real file/dir at $LINK — rescue it before replacing. If the rescue
+    # can't be done, leave the file in place: never destroy user data we
+    # can't first preserve.
     local rescue="/tmp/claude-rescue-$(date +%s)-$$"
-    mkdir -p "$rescue" 2>/dev/null
-    mv "$LINK" "$rescue/.claude.json" 2>/dev/null || rm -rf "$LINK"
+    if ! mkdir -p "$rescue" 2>/dev/null || ! mv "$LINK" "$rescue/.claude.json" 2>/dev/null; then
+      echo "[claude] could not rescue /root/.claude.json — leaving it in place" >&2
+      return 0
+    fi
     echo "[claude] rescued real /root/.claude.json -> $rescue/.claude.json" >&2
-  else
-    rm -f "$LINK" 2>/dev/null
+  elif [ -L "$LINK" ]; then
+    # Wrong-target symlink — safe to remove.
+    rm -f "$LINK"
   fi
-  [ -d "$CONFIG_DIR" ] || mkdir -p "$CONFIG_DIR" 2>/dev/null
+
   [ -f "$USB_TARGET" ] || touch "$USB_TARGET" 2>/dev/null
+  [ -f "$USB_TARGET" ] || return 0   # don't create a dangling symlink
   ln -s "$USB_TARGET" "$LINK" 2>/dev/null
 }
 
 repair_link
 
+# Find the newest runnable versioned binary. The install/update path always
+# creates /root/.local/share/claude/versions/<ver> alongside a symlink at
+# /root/.local/bin/claude — we scan versions/ directly so a stale symlink can't
+# point us at a missing file.
 find_binary() {
   local vdir=/root/.local/share/claude/versions
-  if [ -d "$vdir" ]; then
-    local v
-    for v in $(ls -t "$vdir" 2>/dev/null); do
-      if [ -x "$vdir/$v" ] && [ ! -d "$vdir/$v" ]; then
-        echo "$vdir/$v"
-        return 0
-      fi
-    done
-  fi
-  if [ -x /root/.local/bin/claude ] && [ "$(readlink -f /root/.local/bin/claude 2>/dev/null)" != "$(readlink -f "$0" 2>/dev/null)" ]; then
-    readlink -f /root/.local/bin/claude
-    return 0
-  fi
+  [ -d "$vdir" ] || return 1
+  local v
+  for v in $(ls -t "$vdir" 2>/dev/null); do
+    if [ -f "$vdir/$v" ] && [ -x "$vdir/$v" ]; then
+      echo "$vdir/$v"
+      return 0
+    fi
+  done
   return 1
 }
 

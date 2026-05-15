@@ -93,6 +93,7 @@ else
   if [ -L "/root/.claude" ]; then
     [ "$(readlink -f /root/.claude)" != "${CONFIG_DIR}" ] && rm -f /root/.claude
   elif [ -d "/root/.claude" ]; then
+    echo "Migrating existing /root/.claude/ to USB flash..."
     cp -a /root/.claude/. "${CONFIG_DIR}/" 2>/dev/null || true
     rm -rf /root/.claude
   fi

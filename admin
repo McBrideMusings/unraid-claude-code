@@ -972,13 +972,10 @@ def cmd_deploy(args):
         err("Failed to write .plg file")
         return rc
 
-    # Push the claude wrapper to USB cache so the dev INLINE can restore it
-    # into /usr/local/bin/claude on every boot. (RAM is wiped on reboot; USB
-    # is the only thing that survives.)
+    # Push the claude wrapper to USB so the dev INLINE can restore it into
+    # /usr/local/bin/claude on every boot (RAM is wiped, USB persists). USB is
+    # vfat, so -rt (no owner/perm preservation) — the INLINE script chmods on boot.
     info("Pushing claude wrapper to USB cache...")
-    # USB is vfat — drop -a (no owner/group preservation) and use -rt to keep
-    # times only. Permissions on vfat are mount-controlled, so we chmod via
-    # the INLINE script on each boot instead.
     rc = run_cmd(
         f"rsync -rtvz source/usr/local/bin/claude "
         f"{host}:{PLUGIN_DIR}/bin/claude-wrapper"
