@@ -810,7 +810,7 @@ DEV_PLG_TEMPLATE = r"""<?xml version='1.0' standalone='yes'?>
 </CHANGES>
 
 <FILE Run="/bin/bash">
-<INLINE>
+<INLINE><![CDATA[
 PLUGIN="claude-code"
 PLUGIN_DIR="/boot/config/plugins/${PLUGIN}"
 CONFIG_DIR="${PLUGIN_DIR}/claude-config"
@@ -936,16 +936,16 @@ fi
 touch "${BOOTSTRAP_MARKER}" 2>/dev/null || true
 
 echo "Claude Code dev plugin registered."
-</INLINE>
+]]></INLINE>
 </FILE>
 
 <FILE Run="/bin/bash" Method="remove">
-<INLINE>
+<INLINE><![CDATA[
 rm -f /usr/local/bin/claude
-[ -L "/root/.claude" ] &amp;&amp; rm -f /root/.claude
+[ -L "/root/.claude" ] && rm -f /root/.claude
 rm -rf /usr/local/emhttp/plugins/claude-code
 echo "Claude Code plugin removed."
-</INLINE>
+]]></INLINE>
 </FILE>
 </PLUGIN>
 """
