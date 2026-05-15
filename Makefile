@@ -1,5 +1,5 @@
 PLUGIN_NAME  := claude-code
-PLUGIN_VER   := 2025.03.06
+PLUGIN_VER   := 2026.05.15
 ARCH         := x86_64
 
 PLUGIN_PKG   := $(PLUGIN_NAME)-$(PLUGIN_VER)-$(ARCH)-1.txz
