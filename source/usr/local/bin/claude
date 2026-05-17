@@ -73,4 +73,14 @@ if [ -z "$BIN" ]; then
   exit 127
 fi
 
+# Write-back: if Claude's auto-updater installed a newer version, persist it to
+# USB so reboots restore the latest rather than the old cached copy.
+USB_DIR="/boot/config/plugins/claude-code/bin"
+if [ -d "$USB_DIR" ]; then
+  CURRENT_VER=$(basename "$BIN")
+  if [ "$CURRENT_VER" != "$(cat "${USB_DIR}/version" 2>/dev/null)" ]; then
+    cp "$BIN" "${USB_DIR}/claude" 2>/dev/null && echo "$CURRENT_VER" > "${USB_DIR}/version" 2>/dev/null || true
+  fi
+fi
+
 exec "$BIN" "$@"

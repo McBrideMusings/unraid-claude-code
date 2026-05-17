@@ -111,7 +111,13 @@ if [ -f "${BIN_CACHE}" ]; then
   cp "${BIN_CACHE}" "/root/.local/share/claude/versions/${VERSION}"
   chmod 755 "/root/.local/share/claude/versions/${VERSION}"
   ln -sf "/root/.local/share/claude/versions/${VERSION}" /root/.local/bin/claude
+  echo "${VERSION}" > "${PLUGIN_DIR}/bin/version" 2>/dev/null || true
 fi
+
+# Background update on boot: pull latest Claude version in the background so
+# the binary is always fresh. The write-back in the wrapper then caches it to
+# USB so subsequent reboots restore the updated version.
+(/usr/local/emhttp/plugins/claude-code/scripts/update-claude &>/dev/null) &
 
 # Make sure the wrapper is executable.
 chmod 755 /usr/local/bin/claude 2>/dev/null || true

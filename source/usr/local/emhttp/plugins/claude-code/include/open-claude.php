@@ -14,5 +14,5 @@ usleep(200000);
 
 // Launch ttyd running claude in /root
 // -s9 = send SIGKILL on close, -om1 = max 1 client
-exec("ttyd-exec -s9 -om1 -i '$sock' bash -lc 'export PATH=\"\$HOME/.local/bin:\$PATH\" && cd /root && exec claude' &>/dev/null &");
+exec("ttyd-exec -s9 -om1 -i '$sock' bash -lc 'export PATH=\"/usr/local/bin:\$HOME/.local/bin:\$PATH\" && cd /root && exec claude' &>/dev/null &");
 ?>

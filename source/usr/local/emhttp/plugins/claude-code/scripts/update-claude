@@ -66,6 +66,7 @@ VERSION=$(echo "${INSTALLED}" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' || echo "lates
 cp "${INSTALLED}" "/root/.local/share/claude/versions/${VERSION}"
 chmod 755 "/root/.local/share/claude/versions/${VERSION}"
 ln -sf "/root/.local/share/claude/versions/${VERSION}" /root/.local/bin/claude
+echo "${VERSION}" > "${PLUGIN_DIR}/bin/version" 2>/dev/null || true
 
 rm -rf "${TMPHOME}"
 
