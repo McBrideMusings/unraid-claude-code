@@ -9,7 +9,7 @@
   <!ENTITY releaseURL  "https://github.com/McBrideMusings/unraid-claude-code/releases/download/v&version;">
   <!ENTITY pluginURL   "&gitURL;/claude-code.plg">
   <!ENTITY plugin_pkg  "&name;-&version;-x86_64-1.txz">
-  <!ENTITY plugin_md5  "26e29bdf760572645dc6b2c0393f23d7">
+  <!ENTITY plugin_md5  "7221cd05e64179571a77e80ed2acab2a">
 ]>
 
 <PLUGIN  name="&name;"
