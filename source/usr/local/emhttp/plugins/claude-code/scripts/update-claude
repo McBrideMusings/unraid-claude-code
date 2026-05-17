@@ -22,6 +22,20 @@ else
 fi
 echo ""
 
+# Skip download if already at the latest published version.
+# A failed check (no network, no python3) falls through to a full update.
+CACHED_VER=$(cat "${PLUGIN_DIR}/bin/version" 2>/dev/null || echo "")
+if [ -n "$CACHED_VER" ] && command -v python3 &>/dev/null; then
+  LATEST_VER=$(curl -sf --max-time 5 "https://registry.npmjs.org/@anthropic-ai/claude-code/latest" 2>/dev/null | \
+    python3 -c "import json,sys; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo "")
+  if [ -n "$LATEST_VER" ] && [ "$CACHED_VER" = "$LATEST_VER" ]; then
+    echo "Already at latest version ${CACHED_VER}."
+    echo ""
+    echo "=== Update complete ==="
+    exit 0
+  fi
+fi
+
 # Ensure ~/.local/bin is in PATH for the install process
 export PATH="$HOME/.local/bin:$PATH"
 
