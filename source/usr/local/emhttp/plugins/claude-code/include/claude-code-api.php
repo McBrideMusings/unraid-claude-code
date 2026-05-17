@@ -74,17 +74,32 @@ function getFileTypeDir($type) {
 function listFiles($type) {
   $dir = getFileTypeDir($type);
   if (!$dir || !is_dir($dir)) return [];
-  $files = [];
-  foreach (glob("{$dir}/*.md") as $path) {
+  $byStem = [];
+  // Flat .md files at the top level
+  foreach (glob("{$dir}/*.md") ?: [] as $path) {
     $content = file_get_contents($path);
     $fm = parseFrontMatter($content);
-    $files[] = [
-      'filename' => basename($path),
+    $stem = basename($path, '.md');
+    $byStem[$stem] = [
+      'filename' => $stem,
       'path' => $path,
-      'name' => $fm['name'] ?: basename($path, '.md'),
+      'name' => $fm['name'] ?: $stem,
       'description' => $fm['description'],
     ];
   }
+  // Subdirectory-based skills/commands: <name>/SKILL.md
+  foreach (glob("{$dir}/*/SKILL.md") ?: [] as $path) {
+    $stem = basename(dirname($path));
+    $content = file_get_contents($path);
+    $fm = parseFrontMatter($content);
+    $byStem[$stem] = [
+      'filename' => $stem,
+      'path' => $path,
+      'name' => $fm['name'] ?: $stem,
+      'description' => $fm['description'],
+    ];
+  }
+  $files = array_values($byStem);
   usort($files, function($a, $b) { return strcasecmp($a['filename'], $b['filename']); });
   return $files;
 }
