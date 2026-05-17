@@ -195,14 +195,20 @@ if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'claude-code-api.php' && iss
       $filename = sanitizeFilename($name);
       if (!$filename) { echo json_encode(['success' => false, 'error' => 'Invalid filename']); break; }
       if (!is_dir($baseDir)) mkdir($baseDir, 0755, true);
-      $filePath = "{$baseDir}/{$filename}";
-      if (file_exists($filePath)) { echo json_encode(['success' => false, 'error' => 'File already exists']); break; }
-      $displayName = basename($filename, '.md');
-      $ucName = ucfirst(str_replace('-', ' ', $displayName));
-      if ($type === 'command') {
-        $template = "---\nname: {$displayName}\ndescription: Describe what this command does\nuser_invocable: true\n---\n\n# {$ucName}\n\nCommand instructions go here.\n";
+      $stem = basename($filename, '.md');
+      $ucName = ucfirst(str_replace('-', ' ', $stem));
+      if ($type === 'skill') {
+        $skillDir = "{$baseDir}/{$stem}";
+        if (is_dir($skillDir) || file_exists("{$baseDir}/{$stem}.md")) {
+          echo json_encode(['success' => false, 'error' => 'File already exists']); break;
+        }
+        mkdir($skillDir, 0755, true);
+        $filePath = "{$skillDir}/SKILL.md";
+        $template = "---\nname: {$stem}\ndescription: Describe when this skill should be used\n---\n\n# {$ucName}\n\nSkill instructions go here.\n";
       } else {
-        $template = "---\nname: {$displayName}\ndescription: Describe when this skill should be used\n---\n\n# {$ucName}\n\nSkill instructions go here.\n";
+        $filePath = "{$baseDir}/{$filename}";
+        if (file_exists($filePath)) { echo json_encode(['success' => false, 'error' => 'File already exists']); break; }
+        $template = "---\nname: {$stem}\ndescription: Describe what this command does\nuser_invocable: true\n---\n\n# {$ucName}\n\nCommand instructions go here.\n";
       }
       $ok = file_put_contents($filePath, $template);
       echo json_encode(['success' => $ok !== false, 'path' => $filePath, 'content' => $template]);
@@ -233,6 +239,10 @@ if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'claude-code-api.php' && iss
       $realBase = realpath($baseDir);
       if ($realPath && $realBase && strpos($realPath, $realBase) === 0) {
         $ok = unlink($realPath);
+        $parent = dirname($realPath);
+        if ($parent !== $realBase && dirname($parent) === $realBase) {
+          @rmdir($parent);
+        }
         echo json_encode(['success' => $ok]);
       } else {
         echo json_encode(['success' => false, 'error' => 'Invalid path']);
