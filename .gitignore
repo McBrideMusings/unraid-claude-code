@@ -4,3 +4,4 @@ packages/
 .env
 CLAUDE.local.md
 tmp/
+*.local.*
